@@ -766,7 +766,7 @@ function checkAnswer(ans){
   renderStats();
   renderChart();
   renderWrong();
-  if(g.supa) debouncePush();
+  if(g.supaUrl&&g.supaKey) debouncePush();
 
   // 延迟后进入下一题（确保显示锁定已解除）
   g._displayLock = false;
@@ -797,7 +797,7 @@ function endQuiz(){
   document.getElementById("mainContainer").classList.remove("hidden");
   toast("听写已退出：正确 " + g.correct + " / 错误 " + g.wrong);
   saveState();
-  if(g.supa) syncPush(false);
+  if(g.supaUrl&&g.supaKey) syncPush(false);
 }
 
 // ===== 错词管理 =====
@@ -979,8 +979,8 @@ async function testSupa(){
 var _dp;
 function debouncePush(){ clearTimeout(_dp); _dp=setTimeout(function(){syncPush(false)},1000); }
 async function syncPush(manual){
-  if(!g.supaUrl||!g.supaKey){ if(manual) toast("未连接"); return; }
-  var payload = [{device_id:g.deviceId,book:g.book,unit:g.unit,last_index:g.idx,wrong_book:g.wrongBook,stats:g.stats,updated_at:new Date().toISOString()}];
+  if(!g.supaUrl||!g.supaKey){ if(manual) toast("未连接，请先保存配置"); return; }
+  var payload = {device_id:g.deviceId,book:g.book,unit:g.unit,last_index:g.idx,wrong_book:g.wrongBook,stats:g.stats,updated_at:new Date().toISOString()};
   try{
     var res = await fetch(g.supaUrl+"/rest/v1/vocab_progress?on_conflict=device_id,book,unit",{
       method:"POST",
@@ -993,12 +993,11 @@ async function syncPush(manual){
       body:JSON.stringify(payload)
     });
     if(!res.ok){
-      var txt=await res.text();
-      if(manual) toast("上传失败："+res.status+" "+txt.slice(0,80));
-    } else {
-      if(manual) toast("上传成功 ✅");
-      document.getElementById("syncStatus").textContent="已同步 "+new Date().toLocaleTimeString();
+      var errText=await res.text();
+      console.error("上传HTTP错误",res.status,errText);
+      if(manual) toast("上传失败："+res.status+" "+errText.substring(0,100));
     }
+    else { if(manual) toast("上传成功 ✅"); document.getElementById("syncStatus").textContent="已同步 "+new Date().toLocaleTimeString(); }
   }catch(e){ if(manual) toast("上传失败："+e.message); }
 }
 async function syncPull(manual){
