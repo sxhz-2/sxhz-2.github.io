@@ -1,0 +1,2127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>外研版高中英语单词背诵</title>
+<!-- Supabase CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+/* ========== 全局重置 ========== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --primary: #4F46E5;
+  --primary-light: #818CF8;
+  --primary-bg: #EEF2FF;
+  --success: #10B981;
+  --danger: #EF4444;
+  --warning: #F59E0B;
+  --gray-50: #F9FAFB;
+  --gray-100: #F3F4F6;
+  --gray-200: #E5E7EB;
+  --gray-300: #D1D5DB;
+  --gray-400: #9CA3AF;
+  --gray-500: #6B7280;
+  --gray-600: #4B5563;
+  --gray-700: #374151;
+  --gray-800: #1F2937;
+  --gray-900: #111827;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.05);
+  --shadow: 0 1px 3px rgba(0,0,0,.1), 0 1px 2px rgba(0,0,0,.06);
+  --shadow-md: 0 4px 6px -1px rgba(0,0,0,.1), 0 2px 4px -2px rgba(0,0,0,.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -4px rgba(0,0,0,.1);
+}
+html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  background: var(--gray-50);
+  color: var(--gray-800);
+  line-height: 1.5;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ========== 顶部导航 ========== */
+.header {
+  background: linear-gradient(135deg, var(--primary) 0%, #7C3AED 100%);
+  color: #fff;
+  padding: 16px 20px 20px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: var(--shadow-md);
+}
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.header-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: .5px;
+}
+.header-subtitle {
+  font-size: .82rem;
+  opacity: .85;
+}
+.sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255,255,255,.18);
+  backdrop-filter: blur(6px);
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: .78rem;
+  cursor: pointer;
+  transition: background .2s;
+  user-select: none;
+}
+.sync-badge:active { background: rgba(255,255,255,.3); }
+.sync-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--gray-300);
+  flex-shrink: 0;
+}
+.sync-dot.online { background: #34D399; box-shadow: 0 0 6px #34D399; }
+.sync-dot.syncing { background: var(--warning); animation: pulse 1s infinite; }
+.sync-dot.offline { background: var(--danger); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* ========== 书本选择器 ========== */
+.book-bar {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0;
+  scrollbar-width: none;
+}
+.book-bar::-webkit-scrollbar { display: none; }
+.book-chip {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: .82rem;
+  background: rgba(255,255,255,.15);
+  color: rgba(255,255,255,.8);
+  border: none;
+  cursor: pointer;
+  transition: all .2s;
+  white-space: nowrap;
+}
+.book-chip.active {
+  background: #fff;
+  color: var(--primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ========== 主内容区 ========== */
+.main { padding: 16px 16px 100px; max-width: 680px; margin: 0 auto; }
+
+/* ========== 卡片通用 ========== */
+.card {
+  background: #fff;
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--gray-100);
+}
+.card-title {
+  font-size: .9rem;
+  font-weight: 700;
+  color: var(--gray-700);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ========== 学习设置 ========== */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--gray-100);
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-label { font-size: .85rem; color: var(--gray-600); }
+.setting-value { font-size: .85rem; color: var(--gray-800); font-weight: 500; }
+
+.unit-bar {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 0;
+  scrollbar-width: none;
+}
+.unit-bar::-webkit-scrollbar { display: none; }
+.unit-chip {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: .8rem;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  border: none;
+  cursor: pointer;
+  transition: all .2s;
+}
+.unit-chip.active {
+  background: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+
+.amount-bar { display: flex; gap: 8px; }
+.amount-btn {
+  flex: 1;
+  padding: 8px;
+  border-radius: 10px;
+  border: 2px solid var(--gray-200);
+  background: #fff;
+  font-size: .85rem;
+  font-weight: 600;
+  color: var(--gray-600);
+  cursor: pointer;
+  transition: all .2s;
+  text-align: center;
+}
+.amount-btn.active {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-bg);
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.stepper button {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-200);
+  background: #fff;
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gray-600);
+}
+.stepper button:active { background: var(--gray-100); }
+.stepper span { font-size: .9rem; font-weight: 600; min-width: 24px; text-align: center; }
+
+select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-200);
+  font-size: .82rem;
+  background: #fff;
+  color: var(--gray-700);
+  cursor: pointer;
+}
+
+/* ========== 统计卡片 ========== */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.stat-item {
+  text-align: center;
+  padding: 10px 4px;
+  background: var(--gray-50);
+  border-radius: 10px;
+}
+.stat-num {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--primary);
+  line-height: 1.2;
+}
+.stat-num.green { color: var(--success); }
+.stat-num.red { color: var(--danger); }
+.stat-num.orange { color: var(--warning); }
+.stat-label {
+  font-size: .7rem;
+  color: var(--gray-400);
+  margin-top: 2px;
+}
+
+/* ========== 听写区域 ========== */
+.dictation-area {
+  text-align: center;
+  padding: 20px 10px;
+}
+.word-display {
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--gray-900);
+  margin-bottom: 6px;
+  letter-spacing: 1px;
+}
+.phonetic-display {
+  font-size: .95rem;
+  color: var(--gray-400);
+  margin-bottom: 4px;
+}
+.meaning-display {
+  font-size: 1.05rem;
+  color: var(--gray-600);
+  margin-bottom: 16px;
+}
+.pos-display {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--primary-bg);
+  color: var(--primary);
+  border-radius: 6px;
+  font-size: .75rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.mic-btn {
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, var(--primary), #7C3AED);
+  color: #fff;
+  font-size: 1.8rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 12px;
+  box-shadow: 0 4px 15px rgba(79,70,229,.4);
+  transition: transform .15s;
+}
+.mic-btn:active { transform: scale(.92); }
+.mic-btn.recording {
+  animation: micPulse 1.2s infinite;
+  background: linear-gradient(135deg, var(--danger), #F87171);
+}
+@keyframes micPulse {
+  0% { box-shadow: 0 0 0 0 rgba(239,68,68,.5); }
+  70% { box-shadow: 0 0 0 16px rgba(239,68,68,0); }
+  100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+}
+
+.mic-hint { font-size: .8rem; color: var(--gray-400); }
+
+/* ========== 按钮组 ========== */
+.btn-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.btn {
+  padding: 10px 18px;
+  border-radius: 10px;
+  border: none;
+  font-size: .85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .2s;
+  text-align: center;
+}
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  flex: 1;
+  min-width: 100px;
+}
+.btn-primary:active { transform: scale(.97); opacity: .9; }
+.btn-outline {
+  background: #fff;
+  color: var(--primary);
+  border: 1.5px solid var(--primary);
+  flex: 1;
+  min-width: 80px;
+}
+.btn-outline:active { background: var(--primary-bg); }
+.btn-danger {
+  background: #fff;
+  color: var(--danger);
+  border: 1.5px solid var(--danger);
+}
+.btn-sm {
+  padding: 6px 12px;
+  font-size: .78rem;
+  border-radius: 8px;
+}
+
+/* ========== 错词本 ========== */
+.wrong-list { max-height: 300px; overflow-y: auto; }
+.wrong-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--gray-50);
+  margin-bottom: 6px;
+}
+.wrong-word-info { flex: 1; }
+.wrong-word-text {
+  font-size: .95rem;
+  font-weight: 700;
+  color: var(--gray-800);
+}
+.wrong-word-meta {
+  font-size: .75rem;
+  color: var(--gray-400);
+  margin-top: 2px;
+}
+.wrong-badge {
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: .7rem;
+  font-weight: 600;
+}
+.wrong-badge.fixed { background: #D1FAE5; color: var(--success); }
+.wrong-badge.unfixed { background: #FEE2E2; color: var(--danger); }
+
+.empty-state {
+  text-align: center;
+  padding: 24px 10px;
+  color: var(--gray-400);
+  font-size: .85rem;
+}
+
+/* ========== 同步面板 ========== */
+.sync-panel {
+  display: none;
+  margin-top: 10px;
+}
+.sync-panel.open { display: block; }
+.sync-panel label {
+  display: block;
+  font-size: .78rem;
+  color: var(--gray-500);
+  margin-bottom: 4px;
+  margin-top: 10px;
+}
+.sync-panel input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 10px;
+  font-size: .85rem;
+  transition: border-color .2s;
+  font-family: inherit;
+}
+.sync-panel input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(79,70,229,.1);
+}
+.sync-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.sync-actions .btn { flex: 1; min-width: 90px; }
+
+/* ========== 底部导航 ========== */
+.bottom-nav {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  background: #fff;
+  display: flex;
+  justify-content: space-around;
+  padding: 10px 8px max(10px, env(safe-area-inset-bottom));
+  box-shadow: 0 -2px 10px rgba(0,0,0,.06);
+  z-index: 100;
+  border-top: 1px solid var(--gray-100);
+}
+.nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all .2s;
+  border: none;
+  background: none;
+  color: var(--gray-400);
+  font-size: .7rem;
+}
+.nav-item.active { color: var(--primary); }
+.nav-item .nav-icon { font-size: 1.3rem; }
+.nav-item.active .nav-icon { transform: scale(1.1); }
+
+/* ========== 隐藏面板 ========== */
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* ========== 图表 ========== */
+.chart-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 80px;
+  padding: 10px 4px;
+}
+.chart-bar-group {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.chart-bar {
+  width: 100%;
+  max-width: 28px;
+  border-radius: 4px 4px 0 0;
+  transition: height .4s ease;
+  min-height: 2px;
+}
+.chart-bar.correct { background: var(--success); }
+.chart-bar.wrong { background: var(--danger); }
+.chart-label {
+  font-size: .65rem;
+  color: var(--gray-400);
+  white-space: nowrap;
+}
+
+/* ========== 自定义单词表 ========== */
+.file-drop {
+  border: 2px dashed var(--gray-200);
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  margin-bottom: 10px;
+  transition: all .2s;
+  cursor: pointer;
+}
+.file-drop:active { border-color: var(--primary); background: var(--primary-bg); }
+.file-drop-icon { font-size: 2rem; margin-bottom: 6px; }
+.file-drop-text { font-size: .82rem; color: var(--gray-500); }
+.file-drop-hint { font-size: .72rem; color: var(--gray-400); margin-top: 4px; }
+
+.manual-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.manual-add input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 8px;
+  font-size: .82rem;
+}
+.manual-add input:focus { outline: none; border-color: var(--primary); }
+
+/* ========== Toast ========== */
+.toast {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(.8);
+  background: rgba(0,0,0,.75);
+  color: #fff;
+  padding: 14px 28px;
+  border-radius: 12px;
+  font-size: .9rem;
+  z-index: 9999;
+  opacity: 0;
+  pointer-events: none;
+  transition: all .3s;
+}
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* ========== 听写结果 ========== */
+.result-feedback {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 8px 0;
+  min-height: 24px;
+}
+.result-feedback.correct { color: var(--success); }
+.result-feedback.wrong { color: var(--danger); }
+
+/* ========== 隐藏的文件输入 ========== */
+#fileInput { display: none; }
+
+/* ========== 响应式 ========== */
+@media (min-width: 600px) {
+  .main { padding: 20px 20px 100px; }
+  .stats-grid { gap: 12px; }
+  .stat-num { font-size: 1.6rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- ==================== 顶部 ==================== -->
+<div class="header">
+  <div class="header-top">
+    <div>
+      <div class="header-title" id="headerTitle">外研版高中英语单词背诵</div>
+      <div class="header-subtitle" id="headerSubtitle">必修一 · 全部 · 剩余 0</div>
+    </div>
+    <div class="sync-badge" onclick="toggleSyncPanel()" id="syncBadge">
+      <div class="sync-dot offline" id="syncDot"></div>
+      <span id="syncStatus">未连接</span>
+    </div>
+  </div>
+  <div class="book-bar" id="bookBar"></div>
+</div>
+
+<!-- ==================== 主内容 ==================== -->
+<div class="main">
+
+  <!-- ===== 学习设置面板 ===== -->
+  <div class="panel active" id="panelStudy">
+    <div class="card">
+      <div class="card-title">⚙️ 学习设置</div>
+      <div class="setting-row">
+        <span class="setting-label">单元</span>
+        <div class="unit-bar" id="unitBar"></div>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">本次词量</span>
+        <div class="amount-bar" id="amountBar">
+          <div class="amount-btn" data-amount="10">10</div>
+          <div class="amount-btn active" data-amount="20">20</div>
+          <div class="amount-btn" data-amount="30">30</div>
+          <div class="amount-btn" data-amount="50">50</div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">朗读遍数</span>
+        <div class="stepper">
+          <button onclick="changeReadCount(-1)">−</button>
+          <span id="readCountVal">2</span>
+          <button onclick="changeReadCount(1)">+</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">语音播报</span>
+        <select id="ttsMode">
+          <option value="both">中英文</option>
+          <option value="en">英文</option>
+          <option value="zh">中文</option>
+          <option value="off">关闭</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">英文口音</span>
+        <select id="ttsAccent">
+          <option value="en-US">美式 (en-US)</option>
+          <option value="en-GB">英式 (en-GB)</option>
+          <option value="en-AU">澳式 (en-AU)</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">自动间隔（秒）</span>
+        <div class="stepper">
+          <button onclick="changeInterval(-1)">−</button>
+          <span id="intervalVal">2</span>
+          <button onclick="changeInterval(1)">+</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 操作按钮 -->
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="startDictation()">▶️ 开始听写</button>
+      <button class="btn btn-outline" onclick="startWrongDictation()">📝 错词听写</button>
+    </div>
+    <div class="btn-group" style="margin-top:8px;">
+      <button class="btn btn-sm btn-outline" onclick="resetProgress()">🔄 重置进度</button>
+      <button class="btn btn-sm btn-danger" onclick="clearAll()">🗑️ 清除数据</button>
+      <button class="btn btn-sm btn-outline" onclick="exportData()">📤 导出</button>
+      <button class="btn btn-sm btn-outline" onclick="importData()">📥 导入</button>
+    </div>
+
+    <!-- 听写区域 -->
+    <div class="card" id="dictationCard" style="display:none; margin-top:14px;">
+      <div class="dictation-area">
+        <div class="pos-display" id="posDisplay" style="display:none;"></div>
+        <div class="word-display" id="wordDisplay">点击开始听写</div>
+        <div class="phonetic-display" id="phoneticDisplay"></div>
+        <div class="meaning-display" id="meaningDisplay"></div>
+        <button class="mic-btn" id="micBtn" onclick="toggleRecording()">🎤</button>
+        <div class="mic-hint" id="micHint">按住说话 / 点击录音</div>
+        <div class="result-feedback" id="resultFeedback"></div>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="nextWord()">⏭️ 下一题</button>
+        <button class="btn btn-outline" onclick="skipWord()">⏭️ 跳过</button>
+        <button class="btn btn-outline" onclick="replayWord()">🔊 再听</button>
+        <button class="btn btn-danger" onclick="stopDictation()">✕ 退出</button>
+      </div>
+    </div>
+
+    <!-- ===== 学习统计 ===== -->
+    <div class="card">
+      <div class="card-title">📊 学习统计</div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-num" id="statRemain">0</div>
+          <div class="stat-label">剩余新词</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num" id="statTotal">0</div>
+          <div class="stat-label">本组总数</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num green" id="statCorrect">0</div>
+          <div class="stat-label">本次正确</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num red" id="statWrong">0</div>
+          <div class="stat-label">本次错误</div>
+        </div>
+      </div>
+      <div class="stats-grid" style="margin-top:8px;">
+        <div class="stat-item">
+          <div class="stat-num" id="statTodayTotal">0</div>
+          <div class="stat-label">今日总量</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num green" id="statTodayRate">0%</div>
+          <div class="stat-label">今日正确率</div>
+        </div>
+        <div class="stat-item" style="grid-column: span 2;">
+          <div class="stat-num orange" id="statTotalRate">0%</div>
+          <div class="stat-label">总正确率</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 听写统计图表 ===== -->
+    <div class="card">
+      <div class="card-title">📈 听写统计（近7天）</div>
+      <div class="chart-bars" id="chartBars"></div>
+    </div>
+
+    <!-- ===== 改错统计 ===== -->
+    <div class="card">
+      <div class="card-title">🔧 改错统计（近7天）</div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-num red" id="fixTotal">0</div>
+          <div class="stat-label">错误</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num green" id="fixCorrected">0</div>
+          <div class="stat-label">已改正</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num orange" id="fixPending">0</div>
+          <div class="stat-label">未改正</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num" id="fixRate">0%</div>
+          <div class="stat-label">改正率</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 错词本面板 ===== -->
+  <div class="panel" id="panelWrong">
+    <div class="card">
+      <div class="card-title">📕 错词本（<span id="wrongCount">0</span>）</div>
+      <div id="wrongList"></div>
+    </div>
+  </div>
+
+  <!-- ===== 自定义单词表面板 ===== -->
+  <div class="panel" id="panelCustom">
+    <div class="card">
+      <div class="card-title">📚 自定义单词表</div>
+      <div class="file-drop" onclick="document.getElementById('fileInput').click()">
+        <div class="file-drop-icon">📄</div>
+        <div class="file-drop-text">点击选择文件或拖拽到此处</div>
+        <div class="file-drop-hint">支持 .docx .xlsx .csv .json .pdf .txt</div>
+      </div>
+      <input type="file" id="fileInput" accept=".docx,.xlsx,.xls,.csv,.json,.pdf,.txt" onchange="handleFileUpload(event)">
+      <div id="customTableList" style="margin-top:8px;"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">✏️ 手动添加单词</div>
+      <div class="manual-add">
+        <input type="text" id="manualWord" placeholder="英文单词">
+        <input type="text" id="manualMeaning" placeholder="中文意思">
+        <button class="btn btn-primary btn-sm" onclick="addManualWord()">➕ 添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 同步设置面板 ===== -->
+  <div class="panel" id="panelSync">
+    <div class="card">
+      <div class="card-title">🔗 Supabase 多端同步</div>
+      <div class="sync-panel open" id="syncPanel">
+        <label>Supabase URL</label>
+        <input type="text" id="supaUrl" placeholder="https://xxxx.supabase.co" autocomplete="off">
+        <label>Supabase Anon Key</label>
+        <input type="password" id="supaKey" placeholder="eyJhbGciOiJIUzI1NiIs..." autocomplete="off">
+        <div class="sync-actions">
+          <button class="btn btn-sm btn-outline" onclick="testConnection()">🔍 连接测试</button>
+          <button class="btn btn-sm btn-primary" onclick="saveConfig()">💾 保存配置</button>
+          <button class="btn btn-sm btn-primary" onclick="pushData()">⬆️ 立即上传</button>
+          <button class="btn btn-sm btn-outline" onclick="pullData()">⬇️ 立即下载</button>
+        </div>
+        <div style="margin-top:10px; font-size:.72rem; color:var(--gray-400);">
+          本地优先 · Supabase 多端同步 · 单文件零依赖<br>
+          需要在 Supabase 建表: vocab_progress, wrong_words
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ==================== 底部导航 ==================== -->
+<div class="bottom-nav">
+  <button class="nav-item active" onclick="switchPanel('panelStudy', this)">
+    <span class="nav-icon">📖</span><span>学习</span>
+  </button>
+  <button class="nav-item" onclick="switchPanel('panelWrong', this)">
+    <span class="nav-icon">📕</span><span>错词</span>
+  </button>
+  <button class="nav-item" onclick="switchPanel('panelCustom', this)">
+    <span class="nav-icon">📚</span><span>自定义</span>
+  </button>
+  <button class="nav-item" onclick="switchPanel('panelSync', this)">
+    <span class="nav-icon">🔗</span><span>同步</span>
+  </button>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   外研版高中英语单词背诵 - 完整单文件应用
+   - 本地优先
+   - Supabase 多端同步
+   - 语音识别听写
+   - 自定义单词表导入
+   ============================================================ */
+
+/* ========== 单词数据库 ========== */
+const VOCAB_DB = {
+  "必修一": {
+    "1": [
+      ["amazing","令人大为惊奇的","əˈmeɪzɪŋ","adj."],
+      ["information","信息；消息","ˌɪnfərˈmeɪʃn","n."],
+      ["website","网站","ˈwebsaɪt","n."],
+      ["brilliant","极好的；卓越的","ˈbrɪliənt","adj."],
+      ["complete","完成；使完整","kəmˈpliːt","v./adj."],
+      ["doubt","怀疑；疑惑","daʊt","n./v."],
+      ["improve","改善；提高","ɪmˈpruːv","v."],
+      ["encourage","鼓励","ɪnˈkʌrɪdʒ","v."],
+      ["fantastic","极好的；了不起的","fænˈtæstɪk","adj."],
+      ["discover","发现；发觉","dɪsˈkʌvər","v."],
+      ["organise","组织；筹备","ˈɔːɡənaɪz","v."],
+      ["prepare","准备；预备","prɪˈpeər","v."],
+      ["research","研究；调查","rɪˈsɜːtʃ","n./v."],
+      ["volunteer","志愿者","ˌvɒlənˈtɪər","n."],
+      ["experience","经历；经验","ɪkˈspɪəriəns","n./v."],
+      ["develop","发展；开发","dɪˈveləp","v."],
+      ["communicate","交流；沟通","kəˈmjuːnɪkeɪt","v."],
+      ["environment","环境","ɪnˈvaɪrənmənt","n."],
+      ["government","政府","ˈɡʌvənmənt","n."],
+      ["international","国际的","ˌɪntəˈnæʃnəl","adj."],
+      ["proud","自豪的；骄傲的","praʊd","adj."],
+      ["attend","出席；参加","əˈtend","v."],
+      ["background","背景","ˈbækɡraʊnd","n."],
+      ["support","支持；支撑","səˈpɔːt","v./n."],
+      ["recognise","认出；承认","ˈrekəɡnaɪz","v."],
+      ["challenge","挑战","ˈtʃælɪndʒ","n./v."],
+      ["confidence","信心；自信","ˈkɒnfɪdəns","n."],
+      ["describe","描述；形容","dɪˈskraɪb","v."],
+      ["translate","翻译","trænzˈleɪt","v."],
+      ["imagine","想象；设想","ɪˈmædʒɪn","v."],
+      ["separate","分开的；单独的","ˈseprət","adj./v."],
+      ["personal","个人的；私人的","ˈpɜːsənl","adj."],
+      ["social","社会的；社交的","ˈsəʊʃl","adj."],
+      ["culture","文化；文明","ˈkʌltʃər","n."],
+      ["tradition","传统；惯例","trəˈdɪʃn","n."],
+      ["festival","节日；庆祝","ˈfestɪvl","n."],
+      ["celebrate","庆祝；祝贺","ˈselɪbreɪt","v."],
+      ["explore","探索；探究","ɪkˈsplɔːr","v."],
+      ["introduce","介绍；引进","ˌɪntrəˈdjuːs","v."],
+      ["memory","记忆；回忆","ˈmeməri","n."],
+      ["whisper","低语；耳语","ˈwɪspər","v./n."],
+      ["gather","聚集；集合","ˈɡæðər","v."],
+      ["appreciate","感激；欣赏","əˈpriːʃieɪt","v."],
+      ["connect","连接；联系","kəˈnekt","v."],
+      ["advantage","优势；有利条件","ədˈvɑːntɪdʒ","n."],
+      ["attention","注意；关注","əˈtenʃn","n."],
+      ["succeed","成功；继承","səkˈsiːd","v."],
+      ["quality","质量；品质","ˈkwɒləti","n."],
+      ["require","需要；要求","rɪˈkwaɪər","v."],
+    ],
+    "2": [
+      ["ancient","古代的；古老的","ˈeɪnʃənt","adj."],
+      ["civilisation","文明；文明社会","ˌsɪvəlaɪˈzeɪʃn","n."],
+      ["sculpture","雕塑；雕刻","ˈskʌlptʃər","n."],
+      ["remain","剩余；仍然是","rɪˈmeɪn","v./n."],
+      ["masterpiece","杰作；名著","ˈmɑːstəpiːs","n."],
+      ["witness","目击；见证","ˈwɪtnəs","v./n."],
+      ["emperor","皇帝","ˈempərər","n."],
+      ["phenomenon","现象","fɪˈnɒmɪnən","n."],
+      ["symbol","象征；符号","ˈsɪmbl","n."],
+      ["represent","代表；象征","ˌreprɪˈzent","v."],
+      ["mystery","神秘；谜","ˈmɪstəri","n."],
+      ["decoration","装饰；装潢","ˌdekəˈreɪʃn","n."],
+      ["carve","雕刻；刻","kɑːv","v."],
+      ["preserve","保护；保存","prɪˈzɜːv","v."],
+      ["ruin","废墟；毁灭","ˈruːɪn","n./v."],
+      ["restore","恢复；修复","rɪˈstɔːr","v."],
+      ["heritage","遗产；传统","ˈherɪtɪdʒ","n."],
+      ["architecture","建筑学；建筑风格","ˈɑːkɪtektʃər","n."],
+      ["destination","目的地；终点","ˌdestɪˈneɪʃn","n."],
+      ["journey","旅行；旅程","ˈdʒɜːni","n."],
+      ["adventure","冒险；奇遇","ədˈventʃər","n."],
+      ["landscape","风景；地貌","ˈlændskeɪp","n."],
+      ["climate","气候","ˈklaɪmət","n."],
+      ["continent","大陆；洲","ˈkɒntɪnənt","n."],
+      ["border","边界；边境","ˈbɔːdər","n."],
+      ["species","物种；种类","ˈspiːʃiːz","n."],
+      ["habitat","栖息地","ˈhæbɪtæt","n."],
+      ["survive","幸存；活下来","sərˈvaɪv","v."],
+      ["threaten","威胁；恐吓","ˈθretn","v."],
+      ["pollution","污染","pəˈluːʃn","n."],
+      ["recycle","回收利用","riːˈsaɪkl","v."],
+      ["conservation","保护；保存","ˌkɒnsəˈveɪʃn","n."],
+      ["balance","平衡；均衡","ˈbæləns","n./v."],
+      ["system","系统；体系","ˈsɪstəm","n."],
+      ["resource","资源；财力","rɪˈsɔːs","n."],
+      ["energy","能量；精力","ˈenədʒi","n."],
+      ["transport","运输；交通工具","ˈtrænspɔːt","n./v."],
+      ["industry","工业；产业","ˈɪndəstri","n."],
+      ["population","人口","ˌpɒpjuˈleɪʃn","n."],
+      ["generation","一代人；产生","ˌdʒenəˈreɪʃn","n."],
+      ["youth","青年时期；青春","juːθ","n."],
+      ["elderly","年长的；老年人","ˈeldəli","adj./n."],
+      ["neighbor","邻居","ˈneɪbər","n."],
+      ["community","社区；团体","kəˈmjuːnəti","n."],
+      ["charity","慈善；施舍","ˈtʃærəti","n."],
+      ["donate","捐赠；捐献","dəʊˈneɪt","v."],
+      ["awareness","意识；觉悟","əˈweənəs","n."],
+      ["campaign","运动；活动","kæmˈpeɪn","n."],
+      ["issue","问题；议题","ˈɪʃuː","n."],
+      ["opinion","意见；看法","əˈpɪnjən","n."],
+    ],
+    "3": [
+      ["independent","独立的","ˌɪndɪˈpendənt","adj."],
+      ["responsibility","责任；职责","rɪˌspɒnsəˈbɪləti","n."],
+      ["decision","决定；决策","dɪˈsɪʒn","n."],
+      ["achieve","达到；完成","əˈtʃiːv","v."],
+      ["goal","目标；球门","ɡəʊl","n."],
+      ["method","方法；办法","ˈmeθəd","n."],
+      ["process","过程；步骤","ˈprəʊses","n./v."],
+      ["progress","进步；进展","ˈprəʊɡres","n./v."],
+      ["behaviour","行为；举止","bɪˈheɪvjər","n."],
+      ["attitude","态度；看法","ˈætɪtjuːd","n."],
+      ["motivate","激发；激励","ˈməʊtɪveɪt","v."],
+      ["concentrate","集中；专注","ˈkɒnsntreɪt","v."],
+      ["distract","使分心","dɪˈstrækt","v."],
+      ["anxiety","焦虑；不安","æŋˈzaɪəti","n."],
+      ["pressure","压力；压迫","ˈpreʃər","n."],
+      ["stress","压力；强调","stres","n./v."],
+      ["relax","放松；使松弛","rɪˈlæks","v."],
+      ["meditation","冥想；沉思","ˌmedɪˈteɪʃn","n."],
+      ["exercise","锻炼；练习","ˈeksəsaɪz","n./v."],
+      ["diet","饮食；节食","ˈdaɪət","n."],
+      ["nutrition","营养；滋养","njuˈtrɪʃn","n."],
+      ["balanced","平衡的","ˈbælənst","adj."],
+      ["healthy","健康的","ˈhelθi","adj."],
+      ["disease","疾病","dɪˈziːz","n."],
+      ["symptom","症状；征兆","ˈsɪmptəm","n."],
+      ["treatment","治疗；处理","ˈtriːtmənt","n."],
+      ["medicine","药；医学","ˈmedɪsn","n."],
+      ["recovery","恢复；痊愈","rɪˈkʌvəri","n."],
+      ["prevention","预防；阻止","prɪˈvenʃn","n."],
+      ["immunity","免疫力","ɪˈmjuːnəti","n."],
+      ["infection","感染；传染","ɪnˈfekʃn","n."],
+      ["bacteria","细菌","bækˈtɪəriə","n."],
+      ["virus","病毒","ˈvaɪrəs","n."],
+      ["vaccine","疫苗","ˈvæksiːn","n."],
+      ["surgery","外科手术","ˈsɜːdʒəri","n."],
+      ["therapy","治疗；疗法","ˈθerəpi","n."],
+      ["mental","精神的；心理的","ˈmentl","adj."],
+      ["emotional","情感的；情绪的","ɪˈməʊʃənl","adj."],
+      ["physical","身体的；物质的","ˈfɪzɪkl","adj."],
+      ["strength","力量；长处","streŋθ","n."],
+      ["weakness","弱点；软弱","ˈwiːknəs","n."],
+      ["talent","天赋；才能","ˈtælənt","n."],
+      ["potential","潜力；可能的","pəˈtenʃl","adj./n."],
+      ["effort","努力；尽力","ˈefət","n."],
+      ["discipline","纪律；学科","ˈdɪsəplɪn","n./v."],
+      ["habit","习惯","ˈhæbɪt","n."],
+      ["routine","常规；惯例","ruːˈtiːn","n."],
+      ["schedule","时间表；安排","ˈʃedjuːl","n./v."],
+      ["deadline","截止日期","ˈdedlaɪn","n."],
+    ],
+    "4": [
+      ["technology","技术；科技","tekˈnɒlədʒi","n."],
+      ["digital","数字的；数码的","ˈdɪdʒɪtl","adj."],
+      ["artificial","人工的；人造的","ˌɑːtɪˈfɪʃl","adj."],
+      ["intelligence","智力；情报","ɪnˈtelɪdʒəns","n."],
+      ["robot","机器人","ˈrəʊbɒt","n."],
+      ["software","软件","ˈsɒftweər","n."],
+      ["hardware","硬件","ˈhɑːdweər","n."],
+      ["network","网络；关系网","ˈnetwɜːk","n."],
+      ["database","数据库","ˈdeɪtəbeɪs","n."],
+      ["algorithm","算法","ˈælɡərɪðəm","n."],
+      ["programming","编程","ˈprəʊɡræmɪŋ","n."],
+      ["code","代码；编码","kəʊd","n./v."],
+      ["data","数据；资料","ˈdeɪtə","n."],
+      ["privacy","隐私；秘密","ˈprɪvəsi","n."],
+      ["security","安全；保障","sɪˈkjʊərəti","n."],
+      ["cyber","网络的；计算机的","ˈsaɪbər","adj."],
+      ["virtual","虚拟的；实质的","ˈvɜːtʃuəl","adj."],
+      ["reality","现实；真实","riˈæləti","n."],
+      ["simulation","模拟；仿真","ˌsɪmjuˈleɪʃn","n."],
+      ["innovation","创新；革新","ˌɪnəˈveɪʃn","n."],
+      ["invention","发明；创造","ɪnˈvenʃn","n."],
+      ["patent","专利；专利权","ˈpætnt","n."],
+      ["research","研究；调查","rɪˈsɜːtʃ","n./v."],
+      ["laboratory","实验室","ləˈbɒrətri","n."],
+      ["experiment","实验；试验","ɪkˈsperɪmənt","n./v."],
+      ["discovery","发现；发觉","dɪsˈkʌvəri","n."],
+      ["theory","理论；学说","ˈθɪəri","n."],
+      ["evidence","证据；证明","ˈevɪdəns","n."],
+      ["analysis","分析；解析","əˈnæləsɪs","n."],
+      ["conclusion","结论；结束","kənˈkluːʒn","n."],
+      ["hypothesis","假设；前提","haɪˈpɒθəsɪs","n."],
+      ["observation","观察；注意","ˌɒbzəˈveɪʃn","n."],
+      ["measurement","测量；尺寸","ˈmeʒəmənt","n."],
+      ["calculation","计算；估算","ˌkælkjuˈleɪʃn","n."],
+      ["formula","公式；准则","ˈfɔːmjələ","n."],
+      ["equation","方程式；相等","ɪˈkweɪʒn","n."],
+      ["physics","物理学","ˈfɪzɪks","n."],
+      ["chemistry","化学","ˈkemɪstri","n."],
+      ["biology","生物学","baɪˈɒlədʒi","n."],
+      ["geography","地理学","dʒiˈɒɡrəfi","n."],
+      ["astronomy","天文学","əˈstrɒnəmi","n."],
+      ["philosophy","哲学","fɪˈlɒsəfi","n."],
+      ["psychology","心理学","saɪˈkɒlədʒi","n."],
+      ["economics","经济学","ˌiːkəˈnɒmɪks","n."],
+      ["politics","政治学；政治","ˈpɒlətɪks","n."],
+      ["history","历史","ˈhɪstri","n."],
+      ["literature","文学","ˈlɪtrətʃər","n."],
+      ["mathematics","数学","ˌmæθəˈmætɪks","n."],
+      ["statistics","统计学","stəˈtɪstɪks","n."],
+    ],
+    "5": [
+      ["literature","文学；文献","ˈlɪtrətʃər","n."],
+      ["novel","小说；新奇的","ˈnɒvl","n./adj."],
+      ["poetry","诗歌；诗集","ˈpəʊətri","n."],
+      ["drama","戏剧；剧本","ˈdrɑːmə","n."],
+      ["character","角色；性格","ˈkærəktər","n."],
+      ["plot","情节；密谋","plɒt","n./v."],
+      ["theme","主题；主旋律","θiːm","n."],
+      ["setting","背景；环境","ˈsetɪŋ","n."],
+      ["dialogue","对话；对白","ˈdaɪəlɒɡ","n."],
+      ["narrative","叙述；故事","ˈnærətɪv","n./adj."],
+      ["metaphor","隐喻；比喻","ˈmetəfər","n."],
+      ["symbolism","象征主义","ˈsɪmbəlɪzəm","n."],
+      ["rhythm","节奏；韵律","ˈrɪðəm","n."],
+      ["rhyme","押韵；韵脚","raɪm","n./v."],
+      ["stanza","诗节；段","ˈstænzə","n."],
+      ["prose","散文；白话","prəʊz","n."],
+      ["essay","散文；随笔","ˈeseɪ","n."],
+      ["biography","传记","baɪˈɒɡrəfi","n."],
+      ["autobiography","自传","ˌɔːtəbaɪˈɒɡrəfi","n."],
+      ["fiction","小说；虚构","ˈfɪkʃn","n."],
+      ["non-fiction","非小说类","ˌnɒnˈfɪkʃn","n."],
+      ["genre","类型；体裁","ˈʒɒnrə","n."],
+      ["author","作者；作家","ˈɔːθər","n."],
+      ["editor","编辑；编者","ˈedɪtər","n."],
+      ["publisher","出版商","ˈpʌblɪʃər","n."],
+      ["manuscript","手稿；原稿","ˈmænjuskrɪpt","n."],
+      ["chapter","章；回","ˈtʃæptər","n."],
+      ["paragraph","段落","ˈpærəɡrɑːf","n."],
+      ["sentence","句子；宣判","ˈsentəns","n./v."],
+      ["grammar","语法；文法","ˈɡræmər","n."],
+      ["vocabulary","词汇；词汇量","vəˈkæbjʊləri","n."],
+      ["pronunciation","发音；读法","prəˌnʌnsiˈeɪʃn","n."],
+      ["accent","口音；重音","ˈæksent","n."],
+      ["dialect","方言；土语","ˈdaɪəlekt","n."],
+      ["translation","翻译；译文","trænzˈleɪʃn","n."],
+      ["interpretation","解释；口译","ɪnˌtɜːprɪˈteɪʃn","n."],
+      ["comprehension","理解力","ˌkɒmprɪˈhenʃn","n."],
+      ["expression","表达；表情","ɪkˈspreʃn","n."],
+      ["idiom","习语；成语","ˈɪdiəm","n."],
+      ["phrase","短语；词组","freɪz","n."],
+      ["synonym","同义词","ˈsɪnənɪm","n."],
+      ["antonym","反义词","ˈæntənɪm","n."],
+      ["prefix","前缀","ˈpriːfɪks","n."],
+      ["suffix","后缀","ˈsʌfɪks","n."],
+      ["root","词根；根","ruːt","n."],
+      ["context","上下文；语境","ˈkɒntekst","n."],
+      ["reference","参考；引用","ˈrefrəns","n."],
+      ["quotation","引用；引文","kwəʊˈteɪʃn","n."],
+      ["summary","摘要；总结","ˈsʌməri","n."],
+    ],
+    "6": [
+      ["career","职业；事业","kəˈrɪər","n."],
+      ["profession","职业；专业","prəˈfeʃn","n."],
+      ["occupation","职业；工作","ˌɒkjuˈpeɪʃn","n."],
+      ["employ","雇佣；使用","ɪmˈplɔɪ","v."],
+      ["employer","雇主","ɪmˈplɔɪər","n."],
+      ["employee","雇员","ɪmˈplɔɪiː","n."],
+      ["salary","薪水；工资","ˈsæləri","n."],
+      ["income","收入；所得","ˈɪnkʌm","n."],
+      ["expense","花费；开支","ɪkˈspens","n."],
+      ["budget","预算；安排","ˈbʌdʒɪt","n./v."],
+      ["finance","金融；财政","faɪˈnæns","n./v."],
+      ["economy","经济；节约","ɪˈkɒnəmi","n."],
+      ["trade","贸易；交易","treɪd","n./v."],
+      ["commerce","商业；贸易","ˈkɒmɜːs","n."],
+      ["market","市场；集市","ˈmɑːkɪt","n."],
+      ["customer","顾客；客户","ˈkʌstəmər","n."],
+      ["consumer","消费者","kənˈsjuːmər","n."],
+      ["product","产品；产物","ˈprɒdʌkt","n."],
+      ["service","服务；服役","ˈsɜːvɪs","n."],
+      ["quality","质量；品质","ˈkwɒləti","n."],
+      ["standard","标准；水准","ˈstændəd","n./adj."],
+      ["regulation","规章；规则","ˌreɡjuˈleɪʃn","n."],
+      ["policy","政策；方针","ˈpɒləsi","n."],
+      ["law","法律；法规","lɔː","n."],
+      ["right","权利；正确的","raɪt","n./adj."],
+      ["freedom","自由","ˈfriːdəm","n."],
+      ["equality","平等；均等","iˈkwɒləti","n."],
+      ["justice","正义；公正","ˈdʒʌstɪs","n."],
+      ["democracy","民主","dɪˈmɒkrəsi","n."],
+      ["election","选举；当选","ɪˈlekʃn","n."],
+      ["government","政府","ˈɡʌvənmənt","n."],
+      ["parliament","议会；国会","ˈpɑːləmənt","n."],
+      ["minister","部长；大臣","ˈmɪnɪstər","n."],
+      ["president","总统；校长","ˈprezɪdənt","n."],
+      ["official","官员；官方的","əˈfɪʃl","n./adj."],
+      ["administration","管理；行政","ədˌmɪnɪˈstreɪʃn","n."],
+      ["organization","组织；机构","ˌɔːɡənaɪˈzeɪʃn","n."],
+      ["institution","制度；机构","ˌɪnstɪˈtjuːʃn","n."],
+      ["foundation","基础；基金会","faʊnˈdeɪʃn","n."],
+      ["committee","委员会","kəˈmɪti","n."],
+      ["council","理事会；委员会","ˈkaʊnsl","n."],
+      ["association","协会；关联","əˌsəʊsiˈeɪʃn","n."],
+      ["union","工会；联合","ˈjuːniən","n."],
+      ["cooperation","合作；协作","kəʊˌɒpəˈreɪʃn","n."],
+      ["partnership","合伙；伙伴关系","ˈpɑːtnəʃɪp","n."],
+      ["leadership","领导能力","ˈliːdərʃɪp","n."],
+      ["management","管理；经营","ˈmænɪdʒmənt","n."],
+      ["strategy","策略；战略","ˈstrætədʒi","n."],
+      ["project","项目；计划","ˈprɒdʒekt","n./v."],
+    ],
+  },
+  "必修二": {
+    "1": [
+      ["photograph","照片；拍照","ˈfəʊtəɡrɑːf","n./v."],
+      ["portrait","肖像；描写","ˈpɔːtreɪt","n."],
+      ["landscape","风景；山水","ˈlændskeɪp","n."],
+      ["wildlife","野生动物","ˈwaɪldlaɪf","n."],
+      ["species","物种","ˈspiːʃiːz","n."],
+      ["habitat","栖息地","ˈhæbɪtæt","n."],
+      ["endangered","濒危的","ɪnˈdeɪndʒəd","adj."],
+      ["extinct","灭绝的","ɪkˈstɪŋkt","adj."],
+      ["conservation","保护；保存","ˌkɒnsəˈveɪʃn","n."],
+      ["recycle","回收利用","riːˈsaɪkl","v."],
+      ["sustainable","可持续的","səˈsteɪnəbl","adj."],
+      ["carbon","碳","ˈkɑːbən","n."],
+      ["emission","排放；散发","ɪˈmɪʃn","n."],
+      ["greenhouse","温室","ˈɡriːnhaʊs","n."],
+      ["climate","气候","ˈklaɪmət","n."],
+      ["global","全球的","ˈɡləʊbl","adj."],
+      ["warming","变暖","ˈwɔːmɪŋ","n."],
+      ["pollution","污染","pəˈluːʃn","n."],
+      ["waste","废物；浪费","weɪst","n./v."],
+      ["plastic","塑料","ˈplæstɪk","n./adj."],
+      ["atmosphere","大气；气氛","ˈætməsfɪər","n."],
+      ["ozone","臭氧","ˈəʊzəʊn","n."],
+      ["ecosystem","生态系统","ˈiːkəʊsɪstəm","n."],
+      ["biodiversity","生物多样性","ˌbaɪəʊdaɪˈvɜːsəti","n."],
+      ["forest","森林","ˈfɒrɪst","n."],
+      ["jungle","丛林","ˈdʒʌŋɡl","n."],
+      ["desert","沙漠","ˈdezət","n."],
+      ["ocean","海洋","ˈəʊʃn","n."],
+      ["coral","珊瑚","ˈkɒrəl","n."],
+      ["reef","礁；礁脉","riːf","n."],
+      ["migration","迁徙；移居","maɪˈɡreɪʃn","n."],
+      ["breed","繁殖；品种","briːd","v./n."],
+      ["hatch","孵化；孵出","hætʃ","v."],
+      ["survive","幸存","sərˈvaɪv","v."],
+      ["adapt","适应；改编","əˈdæpt","v."],
+      ["evolve","进化；发展","ɪˈvɒlv","v."],
+      ["natural","自然的","ˈnætʃrəl","adj."],
+      ["resource","资源","rɪˈsɔːs","n."],
+      ["protect","保护","prəˈtekt","v."],
+      ["reserve","保护区；保留","rɪˈzɜːv","n./v."],
+      ["park","公园；停车场","pɑːk","n."],
+      ["national","国家的","ˈnæʃnəl","adj."],
+      ["international","国际的","ˌɪntəˈnæʃnəl","adj."],
+      ["local","当地的","ˈləʊkl","adj."],
+      ["rural","农村的","ˈrʊərəl","adj."],
+      ["urban","城市的","ˈɜːbən","adj."],
+      ["population","人口","ˌpɒpjuˈleɪʃn","n."],
+      ["growth","增长；生长","ɡrəʊθ","n."],
+      ["limit","限制；限度","ˈlɪmɪt","n./v."],
+    ],
+  },
+};
+
+/* ========== 全局状态 ========== */
+const g = {
+  currentBook: '必修一',
+  currentUnit: '全部',
+  amount: 20,
+  readCount: 2,
+  ttsMode: 'both',
+  ttsAccent: 'en-US',
+  autoInterval: 2,
+  isRecording: false,
+  currentWord: null,
+  dictationList: [],
+  dictationIndex: 0,
+  sessionCorrect: 0,
+  sessionWrong: 0,
+  studyActive: false,
+  wrongBook: {},  // { word: { count, fixed, lastInput, ... } }
+  progress: {},   // { "book|unit|word": { correct, wrong, lastSeen } }
+  sessions: [],   // [{ date, correct, wrong, book, unit }]
+  customTables: {}, // { tableName: [{word, meaning, phonetic, pos}] }
+  currentCustomTable: null,
+};
+
+/* ========== Supabase 配置 ========== */
+const SUPABASE_TABLES = {
+  progress: 'vocab_progress',
+  wrong: 'wrong_words',
+  words: 'vocab_words',
+  sessions: 'study_sessions'
+};
+
+let supabaseClient = null;
+const DEVICE_ID = localStorage.getItem('device_id')
+  || (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+localStorage.setItem('device_id', DEVICE_ID);
+
+/* ========== 工具函数 ========== */
+function $(id) { return document.getElementById(id); }
+function showToast(msg, duration = 2000) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
+}
+
+function getAllWords(book, unit) {
+  // 从 VOCAB_DB 获取
+  let words = [];
+  if (book && VOCAB_DB[book]) {
+    if (unit && unit !== '全部') {
+      words = VOCAB_DB[book][unit] || [];
+    } else {
+      Object.values(VOCAB_DB[book]).forEach(arr => words = words.concat(arr));
+    }
+  } else if (!book) {
+    Object.values(VOCAB_DB).forEach(b => {
+      Object.values(b).forEach(arr => words = words.concat(arr));
+    });
+  }
+  // 加入自定义单词表
+  Object.values(g.customTables).forEach(arr => {
+    arr.forEach(w => words.push([w.word, w.meaning, w.phonetic || '', w.pos || '']));
+  });
+  // 去重
+  const seen = new Set();
+  return words.filter(w => {
+    if (seen.has(w[0])) return false;
+    seen.add(w[0]);
+    return true;
+  });
+}
+
+function getFilteredWords() {
+  return getAllWords(g.currentBook, g.currentUnit);
+}
+
+/* ========== 初始化 ========== */
+function init() {
+  // 从 localStorage 恢复
+  try {
+    g.wrongBook = JSON.parse(localStorage.getItem('wrong_book') || '{}');
+    g.progress = JSON.parse(localStorage.getItem('study_progress') || '{}');
+    g.sessions = JSON.parse(localStorage.getItem('study_sessions') || '[]');
+    g.customTables = JSON.parse(localStorage.getItem('custom_tables') || '{}');
+    g.amount = parseInt(localStorage.getItem('amount') || '20');
+    g.readCount = parseInt(localStorage.getItem('read_count') || '2');
+    g.ttsMode = localStorage.getItem('tts_mode') || 'both';
+    g.ttsAccent = localStorage.getItem('tts_accent') || 'en-US';
+    g.autoInterval = parseInt(localStorage.getItem('auto_interval') || '2');
+    g.currentBook = localStorage.getItem('current_book') || '必修一';
+    g.currentUnit = localStorage.getItem('current_unit') || '全部';
+  } catch(e) {}
+
+  renderBookBar();
+  renderUnitBar();
+  renderAmountBar();
+  $('readCountVal').textContent = g.readCount;
+  $('intervalVal').textContent = g.autoInterval;
+  $('ttsMode').value = g.ttsMode;
+  $('ttsAccent').value = g.ttsAccent;
+  updateStats();
+  renderWrongList();
+  renderChart();
+  renderFixStats();
+  renderCustomTables();
+
+  // 初始化 Supabase
+  initSupabase();
+}
+
+/* ========== 渲染书本选择 ========== */
+function renderBookBar() {
+  const books = Object.keys(VOCAB_DB);
+  const bar = $('bookBar');
+  bar.innerHTML = books.map(b => 
+    `<button class="book-chip ${b===g.currentBook?'active':''}" onclick="selectBook('${b}',this)">${b}</button>`
+  ).join('');
+}
+
+function selectBook(book, el) {
+  g.currentBook = book;
+  g.currentUnit = '全部';
+  localStorage.setItem('current_book', book);
+  renderBookBar();
+  renderUnitBar();
+  updateStats();
+}
+
+/* ========== 渲染单元选择 ========== */
+function renderUnitBar() {
+  const units = Object.keys(VOCAB_DB[g.currentBook] || {});
+  const bar = $('unitBar');
+  let html = `<button class="unit-chip ${g.currentUnit==='全部'?'active':''}" onclick="selectUnit('全部',this)">全部</button>`;
+  units.forEach(u => {
+    html += `<button class="unit-chip ${g.currentUnit===u?'active':''}" onclick="selectUnit('${u}',this)">${u}</button>`;
+  });
+  bar.innerHTML = html;
+}
+
+function selectUnit(unit, el) {
+  g.currentUnit = unit;
+  localStorage.setItem('current_unit', unit);
+  renderUnitBar();
+  updateStats();
+}
+
+/* ========== 词量选择 ========== */
+function renderAmountBar() {
+  document.querySelectorAll('.amount-btn').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.amount) === g.amount);
+    btn.onclick = () => {
+      g.amount = parseInt(btn.dataset.amount);
+      localStorage.setItem('amount', g.amount);
+      renderAmountBar();
+    };
+  });
+}
+
+/* ========== 数值调节 ========== */
+function changeReadCount(delta) {
+  g.readCount = Math.max(1, Math.min(5, g.readCount + delta));
+  $('readCountVal').textContent = g.readCount;
+  localStorage.setItem('read_count', g.readCount);
+}
+
+function changeInterval(delta) {
+  g.autoInterval = Math.max(0, Math.min(10, g.autoInterval + delta));
+  $('intervalVal').textContent = g.autoInterval;
+  localStorage.setItem('auto_interval', g.autoInterval);
+}
+
+/* ========== TTS 语音 ========== */
+function speak(text, lang) {
+  if (!text) return;
+  if ('speechSynthesis' in window) {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang || g.ttsAccent;
+    u.rate = 0.85;
+    speechSynthesis.speak(u);
+  }
+}
+
+function replayWord() {
+  if (!g.currentWord) return;
+  const w = g.currentWord;
+  for (let i = 0; i < g.readCount; i++) {
+    setTimeout(() => speak(w[0], g.ttsAccent), i * 1500);
+  }
+  if (g.ttsMode === 'both' || g.ttsMode === 'zh') {
+    setTimeout(() => speak(w[1], 'zh-CN'), g.readCount * 1500);
+  }
+}
+
+/* ========== 听写逻辑 ========== */
+function startDictation() {
+  const words = getFilteredWords();
+  if (!words.length) { showToast('当前范围没有单词'); return; }
+  
+  // 过滤已掌握的词
+  const remaining = words.filter(w => {
+    const key = `${g.currentBook}|${g.currentUnit}|${w[0]}`;
+    const p = g.progress[key];
+    return !p || p.correct < 2;
+  });
+
+  g.dictationList = (remaining.length ? remaining : words)
+    .sort(() => Math.random() - 0.5)
+    .slice(0, g.amount);
+  
+  g.dictationIndex = 0;
+  g.sessionCorrect = 0;
+  g.sessionWrong = 0;
+  g.studyActive = true;
+
+  $('dictationCard').style.display = 'block';
+  $('dictationCard').scrollIntoView({ behavior: 'smooth' });
+  nextWord();
+}
+
+function startWrongDictation() {
+  const wrongs = Object.keys(g.wrongBook);
+  if (!wrongs.length) { showToast('错词本为空！'); return; }
+  
+  const allWords = getAllWords();
+  g.dictationList = wrongs
+    .map(w => allWords.find(aw => aw[0] === w))
+    .filter(Boolean)
+    .sort(() => Math.random() - 0.5);
+  
+  g.dictationIndex = 0;
+  g.sessionCorrect = 0;
+  g.sessionWrong = 0;
+  g.studyActive = true;
+
+  $('dictationCard').style.display = 'block';
+  $('dictationCard').scrollIntoView({ behavior: 'smooth' });
+  nextWord();
+}
+
+function nextWord() {
+  if (g.dictationIndex >= g.dictationList.length) {
+    stopDictation();
+    showToast(`本组完成！正确 ${g.sessionCorrect} / 错误 ${g.sessionWrong}`);
+    return;
+  }
+
+  g.currentWord = g.dictationList[g.dictationIndex];
+  const w = g.currentWord;
+  
+  $('wordDisplay').textContent = '🔊 点击喇叭听发音';
+  $('wordDisplay').style.color = 'var(--gray-400)';
+  $('phoneticDisplay').textContent = '';
+  $('meaningDisplay').textContent = '';
+  $('posDisplay').style.display = 'none';
+  $('resultFeedback').textContent = '';
+  $('resultFeedback').className = 'result-feedback';
+
+  // 自动播放
+  replayWord();
+
+  // 自动间隔
+  if (g.autoInterval > 0) {
+    setTimeout(() => {
+      if (g.studyActive) replayWord();
+    }, g.autoInterval * 1000);
+  }
+}
+
+function skipWord() {
+  g.dictationIndex++;
+  nextWord();
+}
+
+function stopDictation() {
+  g.studyActive = false;
+  g.currentWord = null;
+  $('dictationCard').style.display = 'none';
+  updateStats();
+  saveAll();
+}
+
+/* ========== 语音识别 ========== */
+function toggleRecording() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    showToast('当前浏览器不支持语音识别，试试 Chrome');
+    return;
+  }
+
+  if (g.isRecording) {
+    recognition.stop();
+    return;
+  }
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+  recognition.lang = g.ttsAccent;
+  recognition.continuous = false;
+  recognition.interimResults = false;
+
+  recognition.onstart = () => {
+    g.isRecording = true;
+    $('micBtn').classList.add('recording');
+    $('micHint').textContent = '正在录音...请说英文';
+  };
+
+  recognition.onresult = (e) => {
+    const transcript = e.results[0][0].transcript.trim().toLowerCase();
+    checkAnswer(transcript);
+  };
+
+  recognition.onerror = (e) => {
+    g.isRecording = false;
+    $('micBtn').classList.remove('recording');
+    $('micHint').textContent = '识别失败，请重试';
+  };
+
+  recognition.onend = () => {
+    g.isRecording = false;
+    $('micBtn').classList.remove('recording');
+    $('micHint').textContent = '按住说话 / 点击录音';
+  };
+
+  recognition.start();
+}
+
+function checkAnswer(input) {
+  if (!g.currentWord) return;
+  const w = g.currentWord;
+  const correct = w[0].toLowerCase();
+  const fb = $('resultFeedback');
+  
+  if (input === correct) {
+    // 正确
+    fb.textContent = `✅ 正确！${w[0]} = ${w[1]}`;
+    fb.className = 'result-feedback correct';
+    g.sessionCorrect++;
+    
+    // 更新进度
+    const key = `${g.currentBook}|${g.currentUnit}|${w[0]}`;
+    if (!g.progress[key]) g.progress[key] = { correct: 0, wrong: 0, lastSeen: '' };
+    g.progress[key].correct++;
+    g.progress[key].lastSeen = new Date().toISOString();
+
+    // 从错词本移除
+    if (g.wrongBook[w[0]]) {
+      g.wrongBook[w[0]].fixed = true;
+    }
+
+    // 显示完整信息
+    $('wordDisplay').textContent = w[0];
+    $('wordDisplay').style.color = 'var(--gray-900)';
+    $('phoneticDisplay').textContent = w[2] || '';
+    $('meaningDisplay').textContent = w[1];
+    if (w[3]) { $('posDisplay').textContent = w[3]; $('posDisplay').style.display = 'inline-block'; }
+
+    updateStats();
+    saveAll();
+
+    // 自动下一题
+    setTimeout(() => { g.dictationIndex++; nextWord(); }, 1500);
+  } else {
+    // 错误
+    fb.textContent = `❌ 不对，正确答案是：${w[0]}`;
+    fb.className = 'result-feedback wrong';
+    g.sessionWrong++;
+    
+    const key = `${g.currentBook}|${g.currentUnit}|${w[0]}`;
+    if (!g.progress[key]) g.progress[key] = { correct: 0, wrong: 0, lastSeen: '' };
+    g.progress[key].wrong++;
+
+    // 加入错词本
+    if (!g.wrongBook[w[0]]) {
+      g.wrongBook[w[0]] = {
+        word: w[0],
+        meaning: w[1],
+        phonetic: w[2] || '',
+        pos: w[3] || '',
+        count: 0,
+        fixed: false,
+        lastInput: input,
+        book: g.currentBook,
+        unit: g.currentUnit,
+      };
+    }
+    g.wrongBook[w[0]].count++;
+    g.wrongBook[w[0]].lastInput = input;
+
+    updateStats();
+    renderWrongList();
+    saveAll();
+  }
+}
+
+/* ========== 统计更新 ========== */
+function updateStats() {
+  const words = getFilteredWords();
+  const total = words.length;
+  
+  let learned = 0, correctTotal = 0, wrongTotal = 0;
+  Object.entries(g.progress).forEach(([key, val]) => {
+    if (key.startsWith(`${g.currentBook}|${g.currentUnit === '全部' ? '' : g.currentUnit}`)) {
+      if (val.correct > 0) learned++;
+      correctTotal += val.correct;
+      wrongTotal += val.wrong;
+    }
+  });
+
+  // 如果选了全部单元，统计所有
+  if (g.currentUnit === '全部') {
+    learned = 0; wrongTotal = 0; correctTotal = 0;
+    Object.entries(g.progress).forEach(([key, val]) => {
+      if (key.startsWith(g.currentBook)) {
+        if (val.correct > 0) learned++;
+        correctTotal += val.correct;
+        wrongTotal += val.wrong;
+      }
+    });
+  }
+
+  const remain = Math.max(0, total - learned);
+  $('statRemain').textContent = remain;
+  $('statTotal').textContent = total;
+  $('statCorrect').textContent = g.sessionCorrect;
+  $('statWrong').textContent = g.sessionWrong;
+
+  // 今日统计
+  const today = new Date().toISOString().slice(0, 10);
+  let todayCorrect = 0, todayWrong = 0;
+  g.sessions.forEach(s => {
+    if (s.date === today) {
+      todayCorrect += s.correct;
+      todayWrong += s.wrong;
+    }
+  });
+  const todayTotal = todayCorrect + todayWrong;
+  $('statTodayTotal').textContent = todayTotal;
+  $('statTodayRate').textContent = todayTotal ? Math.round(todayCorrect / todayTotal * 100) + '%' : '0%';
+  
+  const grandTotal = correctTotal + wrongTotal;
+  $('statTotalRate').textContent = grandTotal ? Math.round(correctTotal / grandTotal * 100) + '%' : '0%';
+
+  // 头部
+  $('headerSubtitle').textContent = `${g.currentBook} · ${g.currentUnit} · 剩余 ${remain}`;
+}
+
+/* ========== 图表渲染 ========== */
+function renderChart() {
+  const container = $('chartBars');
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    days.push(d.toISOString().slice(5, 10));
+  }
+  
+  const data = days.map(day => {
+    let c = 0, w = 0;
+    g.sessions.forEach(s => {
+      if (s.date && s.date.slice(5, 10) === day) {
+        c += s.correct; w += s.wrong;
+      }
+    });
+    return { day, c, w };
+  });
+
+  const maxVal = Math.max(1, ...data.map(d => d.c + d.w));
+  
+  container.innerHTML = data.map(d => {
+    const h1 = Math.round(d.c / maxVal * 60);
+    const h2 = Math.round(d.w / maxVal * 60);
+    return `<div class="chart-bar-group">
+      <div class="chart-bar correct" style="height:${h1}px" title="正确:${d.c}"></div>
+      <div class="chart-bar wrong" style="height:${h2}px" title="错误:${d.w}"></div>
+      <div class="chart-label">${d.day.slice(3)}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ========== 改错统计 ========== */
+function renderFixStats() {
+  const wrongs = Object.values(g.wrongBook);
+  const total = wrongs.length;
+  const fixed = wrongs.filter(w => w.fixed).length;
+  const pending = total - fixed;
+  
+  $('fixTotal').textContent = total;
+  $('fixCorrected').textContent = fixed;
+  $('fixPending').textContent = pending;
+  $('fixRate').textContent = total ? Math.round(fixed / total * 100) + '%' : '0%';
+}
+
+/* ========== 错词本渲染 ========== */
+function renderWrongList() {
+  const container = $('wrongList');
+  const wrongs = Object.values(g.wrongBook).sort((a, b) => b.count - a.count);
+  $('wrongCount').textContent = wrongs.length;
+
+  if (!wrongs.length) {
+    container.innerHTML = '<div class="empty-state">🎉 当前范围无错词</div>';
+    return;
+  }
+
+  container.innerHTML = wrongs.map(w => `
+    <div class="wrong-item">
+      <div class="wrong-word-info">
+        <div class="wrong-word-text">${w.word}</div>
+        <div class="wrong-word-meta">${w.meaning} · 错 ${w.count} 次${w.lastInput ? ' · 上次: '+w.lastInput : ''}</div>
+      </div>
+      <div class="wrong-badge ${w.fixed?'fixed':'unfixed'}" onclick="toggleFixed('${w.word}')">
+        ${w.fixed?'已改正':'未改正'}
+      </div>
+    </div>
+  `).join('');
+}
+
+function toggleFixed(word) {
+  if (g.wrongBook[word]) {
+    g.wrongBook[word].fixed = !g.wrongBook[word].fixed;
+    saveAll();
+    renderWrongList();
+    renderFixStats();
+  }
+}
+
+/* ========== 面板切换 ========== */
+function switchPanel(panelId, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  $(panelId).classList.add('active');
+  btn.classList.add('active');
+}
+
+/* ========== 数据持久化 ========== */
+function saveAll() {
+  localStorage.setItem('wrong_book', JSON.stringify(g.wrongBook));
+  localStorage.setItem('study_progress', JSON.stringify(g.progress));
+  localStorage.setItem('study_sessions', JSON.stringify(g.sessions));
+  localStorage.setItem('custom_tables', JSON.stringify(g.customTables));
+}
+
+function resetProgress() {
+  if (!confirm('确定重置当前范围的学习进度吗？')) return;
+  Object.keys(g.progress).forEach(key => {
+    if (key.startsWith(g.currentBook)) delete g.progress[key];
+  });
+  saveAll();
+  updateStats();
+  showToast('进度已重置');
+}
+
+function clearAll() {
+  if (!confirm('⚠️ 确定清除所有数据吗？此操作不可恢复！')) return;
+  localStorage.clear();
+  g.wrongBook = {};
+  g.progress = {};
+  g.sessions = [];
+  g.customTables = {};
+  updateStats();
+  renderWrongList();
+  renderChart();
+  renderFixStats();
+  renderCustomTables();
+  showToast('所有数据已清除');
+}
+
+/* ========== 导入导出 ========== */
+function exportData() {
+  const data = {
+    wrong_book: g.wrongBook,
+    study_progress: g.progress,
+    study_sessions: g.sessions,
+    custom_tables: g.customTables,
+    export_date: new Date().toISOString(),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `vocab_backup_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('导出成功');
+}
+
+function importData() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (data.wrong_book) g.wrongBook = { ...g.wrongBook, ...data.wrong_book };
+        if (data.study_progress) g.progress = { ...g.progress, ...data.study_progress };
+        if (data.study_sessions) g.sessions = data.study_sessions;
+        if (data.custom_tables) g.customTables = { ...g.customTables, ...data.custom_tables };
+        saveAll();
+        updateStats();
+        renderWrongList();
+        renderChart();
+        renderFixStats();
+        renderCustomTables();
+        showToast('导入成功');
+      } catch(err) {
+        showToast('导入失败：文件格式错误');
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+/* ========== 自定义单词表 ========== */
+function handleFileUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  const reader = new FileReader();
+  
+  reader.onload = (ev) => {
+    try {
+      let words = [];
+      if (ext === 'json') {
+        const data = JSON.parse(ev.target.result);
+        words = data.words || data || [];
+      } else if (ext === 'csv' || ext === 'txt') {
+        const lines = ev.target.result.split('\n');
+        lines.forEach(line => {
+          const parts = line.split(/[,，\t]/).map(s => s.trim());
+          if (parts[0] && parts[1]) {
+            words.push({ word: parts[0], meaning: parts[1], phonetic: parts[2] || '', pos: parts[3] || '' });
+          }
+        });
+      } else if (ext === 'xlsx' || ext === 'xls') {
+        showToast('请先将Excel转为CSV格式再导入');
+        return;
+      } else {
+        showToast('不支持的格式：' + ext);
+        return;
+      }
+      
+      const tableName = file.name.replace(/\.[^.]+$/, '');
+      g.customTables[tableName] = words;
+      g.currentCustomTable = tableName;
+      saveAll();
+      renderCustomTables();
+      showToast(`已导入 ${words.length} 个单词`);
+    } catch(err) {
+      showToast('解析失败：' + err.message);
+    }
+  };
+  
+  if (ext === 'json' || ext === 'csv' || ext === 'txt') {
+    reader.readAsText(file);
+  } else {
+    reader.readAsArrayBuffer(file);
+  }
+}
+
+function renderCustomTables() {
+  const container = $('customTableList');
+  const tables = Object.keys(g.customTables);
+  if (!tables.length) {
+    container.innerHTML = '<div class="empty-state">暂无自定义单词表</div>';
+    return;
+  }
+  container.innerHTML = tables.map(t => `
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:var(--gray-50); border-radius:8px; margin-bottom:6px;">
+      <span style="font-size:.85rem;">📄 ${t} (${g.customTables[t].length}词)</span>
+      <div>
+        <button class="btn btn-sm btn-primary" onclick="useCustomTable('${t}')">使用</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteCustomTable('${t}')">删除</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function useCustomTable(name) {
+  g.currentCustomTable = name;
+  showToast(`已切换到「${name}」`);
+  switchPanel('panelStudy', document.querySelector('.nav-item'));
+}
+
+function deleteCustomTable(name) {
+  if (!confirm(`删除单词表「${name}」？`)) return;
+  delete g.customTables[name];
+  saveAll();
+  renderCustomTables();
+}
+
+function addManualWord() {
+  const word = $('manualWord').value.trim();
+  const meaning = $('manualMeaning').value.trim();
+  if (!word || !meaning) { showToast('请填写英文和中文'); return; }
+  
+  const tableName = '手动录入';
+  if (!g.customTables[tableName]) g.customTables[tableName] = [];
+  g.customTables[tableName].push({ word, meaning, phonetic: '', pos: '' });
+  
+  $('manualWord').value = '';
+  $('manualMeaning').value = '';
+  saveAll();
+  renderCustomTables();
+  showToast('已添加');
+}
+
+/* ========== Supabase 同步 ========== */
+function initSupabase() {
+  const url = localStorage.getItem('supa_url');
+  const key = localStorage.getItem('supa_key');
+  if (url && key && window.supabase) {
+    try {
+      supabaseClient = window.supabase.createClient(url, key);
+      updateSyncStatus('online', '已连接');
+    } catch(e) {
+      updateSyncStatus('offline', '未连接');
+    }
+  }
+}
+
+function updateSyncStatus(state, text) {
+  const dot = $('syncDot');
+  const status = $('syncStatus');
+  if (dot) dot.className = 'sync-dot ' + state;
+  if (status) status.textContent = text;
+}
+
+function toggleSyncPanel() {
+  switchPanel('panelSync', document.querySelector('.nav-item[onclick*="panelSync"]'));
+}
+
+// 保存配置
+function saveConfig() {
+  const url = $('supaUrl').value.trim();
+  const key = $('supaKey').value.trim();
+  if (!url || !key) { showToast('请填写完整的 URL 和 Key'); return; }
+  localStorage.setItem('supa_url', url);
+  localStorage.setItem('supa_key', key);
+  try {
+    supabaseClient = window.supabase.createClient(url, key);
+    updateSyncStatus('online', '已连接');
+    showToast('✅ 配置已保存');
+  } catch(e) {
+    showToast('❌ 配置失败: ' + e.message);
+  }
+}
+
+// 连接测试
+async function testConnection() {
+  if (!supabaseClient) { showToast('请先保存配置'); return; }
+  try {
+    const { data, error } = await supabaseClient
+      .from(SUPABASE_TABLES.progress).select('count', { count: 'exact', head: true });
+    if (error) throw error;
+    showToast(`✅ 连接成功！已有 ${data || 0} 条记录`);
+    updateSyncStatus('online', '已连接 ✓');
+  } catch(err) {
+    showToast('❌ 连接失败: ' + err.message);
+    updateSyncStatus('offline', '连接失败');
+  }
+}
+
+// 上传（Push）
+async function pushData() {
+  if (!supabaseClient) { showToast('请先保存配置'); return; }
+  updateSyncStatus('syncing', '上传中...');
+  
+  try {
+    // 1. 上传单词表
+    const words = getAllWords();
+    if (words.length) {
+      const rows = words.map(w => ({
+        word: w[0], meaning: w[1], phonetic: w[2] || '', pos: w[3] || '',
+        unit: g.currentUnit, book: g.currentBook
+      }));
+      const { error: e1 } = await supabaseClient.from(SUPABASE_TABLES.words)
+        .upsert(rows, { onConflict: 'word' });
+      if (e1) console.warn('words upload warn:', e1.message);
+    }
+
+    // 2. 上传学习进度
+    const progressEntries = Object.entries(g.progress);
+    if (progressEntries.length) {
+      const rows = progressEntries.map(([key, val]) => {
+        const parts = key.split('|');
+        return {
+          device_id: DEVICE_ID,
+          book: parts[0] || '',
+          unit: parts[1] || '',
+          word: parts[2] || '',
+          correct: val.correct || 0,
+          wrong: val.wrong || 0,
+          last_seen: val.lastSeen || null,
+        };
+      });
+      const { error: e2 } = await supabaseClient.from(SUPABASE_TABLES.progress)
+        .upsert(rows, { onConflict: 'device_id,book,unit,word' });
+      if (e2) console.warn('progress upload warn:', e2.message);
+    }
+
+    // 3. 上传错词本（关键修复！）
+    const wrongEntries = Object.values(g.wrongBook);
+    if (wrongEntries.length) {
+      const rows = wrongEntries.map(w => ({
+        device_id: DEVICE_ID,
+        word: w.word,
+        meaning: w.meaning || '',
+        phonetic: w.phonetic || '',
+        pos: w.pos || '',
+        count: w.count || 0,
+        fixed: w.fixed || false,
+        last_input: w.lastInput || '',
+        book: w.book || g.currentBook,
+        unit: w.unit || g.currentUnit,
+      }));
+      const { error: e3 } = await supabaseClient.from(SUPABASE_TABLES.wrong)
+        .upsert(rows, { onConflict: 'device_id,word' });
+      if (e3) console.warn('wrong upload warn:', e3.message);
+    }
+
+    // 4. 上传学习记录
+    if (g.sessions.length) {
+      const rows = g.sessions.map(s => ({ ...s, device_id: DEVICE_ID }));
+      const { error: e4 } = await supabaseClient.from(SUPABASE_TABLES.sessions)
+        .upsert(rows, { onConflict: 'device_id,date' });
+      if (e4) console.warn('sessions upload warn:', e4.message);
+    }
+
+    updateSyncStatus('online', '已连接 ✓');
+    showToast('🎉 全部数据上传成功！');
+  } catch(err) {
+    updateSyncStatus('offline', '上传失败');
+    showToast('❌ 上传失败: ' + err.message);
+  }
+}
+
+// 下载（Pull）
+async function pullData() {
+  if (!supabaseClient) { showToast('请先保存配置'); return; }
+  updateSyncStatus('syncing', '下载中...');
+  
+  try {
+    // 1. 拉取学习进度
+    const { data: progress } = await supabaseClient
+      .from(SUPABASE_TABLES.progress)
+      .select('*').eq('device_id', DEVICE_ID);
+    if (progress && progress.length) {
+      const map = {};
+      progress.forEach(p => {
+        const key = `${p.book}|${p.unit}|${p.word}`;
+        map[key] = { correct: p.correct || 0, wrong: p.wrong || 0, lastSeen: p.last_seen || '' };
+      });
+      g.progress = { ...g.progress, ...map };
+    }
+
+    // 2. 拉取错词本（关键修复！）
+    const { data: wrongs } = await supabaseClient
+      .from(SUPABASE_TABLES.wrong)
+      .select('*').eq('device_id', DEVICE_ID);
+    if (wrongs && wrongs.length) {
+      wrongs.forEach(w => {
+        g.wrongBook[w.word] = {
+          word: w.word,
+          meaning: w.meaning || '',
+          phonetic: w.phonetic || '',
+          pos: w.pos || '',
+          count: w.count || 0,
+          fixed: w.fixed || false,
+          lastInput: w.last_input || '',
+          book: w.book || '',
+          unit: w.unit || '',
+        };
+      });
+    }
+
+    saveAll();
+    updateStats();
+    renderWrongList();
+    renderChart();
+    renderFixStats();
+
+    updateSyncStatus('online', '已连接 ✓');
+    showToast(`🎉 下载成功！进度 ${Object.keys(g.progress).length} 条，错词 ${Object.keys(g.wrongBook).length} 个`);
+  } catch(err) {
+    updateSyncStatus('offline', '下载失败');
+    showToast('❌ 下载失败: ' + err.message);
+  }
+}
+
+/* ========== 事件绑定 ========== */
+$('ttsMode').addEventListener('change', (e) => {
+  g.ttsMode = e.target.value;
+  localStorage.setItem('tts_mode', g.ttsMode);
+});
+
+$('ttsAccent').addEventListener('change', (e) => {
+  g.ttsAccent = e.target.value;
+  localStorage.setItem('tts_accent', g.ttsAccent);
+});
+
+/* ========== 页面加载 ========== */
+window.addEventListener('load', () => {
+  init();
+  // 回填 Supabase 配置
+  const url = localStorage.getItem('supa_url');
+  const key = localStorage.getItem('supa_key');
+  if (url) $('supaUrl').value = url;
+  if (key) $('supaKey').value = key;
+});
+
+/* ========== 记录学习会话 ========== */
+window.addEventListener('beforeunload', () => {
+  if (g.studyActive && (g.sessionCorrect > 0 || g.sessionWrong > 0)) {
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = g.sessions.find(s => s.date === today);
+    if (existing) {
+      existing.correct += g.sessionCorrect;
+      existing.wrong += g.sessionWrong;
+    } else {
+      g.sessions.push({
+        date: today,
+        correct: g.sessionCorrect,
+        wrong: g.sessionWrong,
+        book: g.currentBook,
+        unit: g.currentUnit,
+      });
+    }
+    saveAll();
+  }
+});
+</script>
+</body>
+</html>
