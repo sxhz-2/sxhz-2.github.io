@@ -10875,6 +10875,169 @@ document.addEventListener('visibilitychange', function(){
 // ===== 启动 =====
 init();
 console.log("✅ 单词背诵应用已启动 (含自定义单词表+月统计)");
+
+/* ========= 全局 ========= */
+let sb = null;
+let currentUser = null;
+let __autoTimer = null;
+let __syncing = false;
+
+const $ = id => document.getElementById(id);
+function toast(msg){
+  const t = document.createElement('div');
+  t.className='toast'; t.innerText=msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(),2200);
+}
+function setDot(state,text){
+  const dot=$('syncDot'), st=$('syncStatus');
+  if(dot) dot.className='sync-status-dot '+state;
+  if(st) st.lastChild.textContent=' '+text;
+}
+
+/* ========= Supabase 初始化 ========= */
+function initSB(){
+  const url = (localStorage.getItem('supaUrl')||($('supaUrl')&&$('supaUrl').value)||'').trim();
+  const key = (localStorage.getItem('supaKey')||($('supaKey')&&$('supaKey').value)||'').trim();
+  if(!url||!key) return null;
+  if(!sb) sb = supabase.createClient(url,key);
+  return sb;
+}
+
+/* ========= 登录 UI ========= */
+function renderAuthUI(){
+  const box = $('authUI'); if(!box) return;
+  if(currentUser){
+    box.innerHTML = `
+      <span style="font-size:12px;color:#10b981;font-weight:600">✅ ${currentUser.email}</span>
+      <button class="btn btn-red" id="btnLogout" style="padding:4px 10px;font-size:12px">登出</button>
+      <span id="autoTag" style="font-size:11px;color:#3b82f6">🔄 自动同步中</span>`;
+    $('btnLogout').onclick = async ()=>{ await sb.auth.signOut(); location.reload(); };
+  } else {
+    box.innerHTML = `
+      <input id="authEmail" placeholder="邮箱" style="width:140px;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">
+      <input id="authPwd" type="password" placeholder="密码" style="width:110px;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">
+      <button class="btn btn-green" id="btnLogin" style="padding:4px 10px;font-size:12px">登录</button>
+      <button class="btn btn-blue" id="btnSignup" style="padding:4px 10px;font-size:12px">注册</button>
+      <span style="font-size:11px;color:#64748b">（免验证）</span>`;
+    $('btnLogin').onclick = doLogin;
+    $('btnSignup').onclick = doSignup;
+  }
+}
+
+async function doLogin(){
+  initSB(); if(!sb) return alert('先填 URL / Key 并保存');
+  const email=$('authEmail').value.trim(), pwd=$('authPwd').value;
+  if(!email||!pwd) return alert('请输入邮箱和密码');
+  const {data,error}=await sb.auth.signInWithPassword({email,password:pwd});
+  if(error) return alert('登录失败:'+error.message);
+  currentUser=data.user; renderAuthUI(); setDot('online','已登录');
+  toast('✅ 登录成功，正在拉取最新数据…');
+  await pullFromCloud(true);
+}
+async function doSignup(){
+  initSB(); if(!sb) return alert('先填 URL / Key 并保存');
+  const email=$('authEmail').value.trim(), pwd=$('authPwd').value;
+  if(!email||!pwd) return alert('请输入邮箱和密码');
+  if(pwd.length<6) return alert('密码至少6位');
+  const {data,error}=await sb.auth.signUp({email,password:pwd});
+  if(error) return alert('注册失败:'+error.message);
+  if(data.session){ currentUser=data.session.user; renderAuthUI(); setDot('online','已登录');
+    toast('注册成功，已自动登录'); await pullFromCloud(true);
+  } else alert('注册成功，但后台仍要求邮件验证，请去 Authentication→Settings 关闭 Email confirmations');
+}
+
+/* ========= 整包 上传 / 下载 ========= */
+async function pushToCloud(silent){
+  if(!sb||!currentUser||__syncing) return;
+  __syncing=true;
+  if(!silent) setDot('syncing','上传中…');
+  const snap={};
+  for(let i=0;i<localStorage.length;i++){
+    const k=localStorage.key(i);
+    if(k==='supaUrl'||k==='supaKey') continue;
+    const raw=localStorage.getItem(k);
+    try{snap[k]=JSON.parse(raw)}catch{snap[k]=raw}
+  }
+  const {error}=await sb.from('user_snapshot').upsert({
+    user_id:currentUser.id, data:snap, updated_at:new Date().toISOString()
+  });
+  __syncing=false;
+  if(!error && !silent){ toast('☁️ 已上传云端'); setDot('online','已同步'); }
+  if(error && !silent){ alert('上传失败:'+error.message); setDot('offline','上传失败'); }
+  if(silent && !error) setDot('online','已同步');
+}
+async function pullFromCloud(reloadAfter){
+  if(!sb||!currentUser||__syncing) return;
+  __syncing=true;
+  setDot('syncing','拉取中…');
+  const {data,error}=await sb.from('user_snapshot').select('*').eq('user_id',currentUser.id).single();
+  __syncing=false;
+  if(error||!data){ setDot('online','已登录'); return toast('云端暂无数据，先上传一次'); }
+  const snap=data.data||{};
+  for(let k in snap) localStorage.setItem(k, typeof snap[k]==='string'?snap[k]:JSON.stringify(snap[k]));
+  setDot('online','已同步');
+  toast('⬇️ 云端数据已同步到本地');
+  if(reloadAfter) setTimeout(()=>location.reload(),900);
+}
+
+/* ========= 接管原按钮 ========= */
+function rebind(id,fn){const b=$(id);if(!b)return;const c=b.cloneNode(true);b.parentNode.replaceChild(c,b);c.onclick=fn;}
+rebind('btnTest', async ()=>{
+  const url=($('supaUrl').value||'').trim(), key=($('supaKey').value||'').trim();
+  if(!url||!key) return alert('先填 URL 和 Key');
+  sb=supabase.createClient(url,key);
+  const {data,error}=await sb.auth.getSession();
+  localStorage.setItem('supaUrl',url);localStorage.setItem('supaKey',key);
+  if(error) return alert('连接失败:'+error.message);
+  if(data.session){currentUser=data.session.user;renderAuthUI();setDot('online','已登录');}
+  toast('✅ 连接正常 · '+(data.session?'已自动登录':'请登录'));
+});
+rebind('btnPush', ()=>pushToCloud(false));
+rebind('btnPull', ()=>pullFromCloud(true));
+rebind('btnSave', async ()=>{
+  localStorage.setItem('supaUrl',$('supaUrl').value);
+  localStorage.setItem('supaKey',$('supaKey').value);
+  sb=supabase.createClient($('supaUrl').value.trim(),$('supaKey').value.trim());
+  const {data}=await sb.auth.getSession();
+  if(data.session){currentUser=data.session.user;renderAuthUI();setDot('online','已登录');}
+  toast('💾 配置已保存');
+});
+
+/* ========= 自动同步核心 ========= */
+function startAutoSync(){
+  stopAutoSync();
+  __autoTimer = setInterval(()=>pushToCloud(true), 60000);
+  window.addEventListener('beforeunload', ()=>pushToCloud(true));
+  // 进听写前先拉最新
+  const hooks=[$('btnStart'),$('btnWrongMode')];
+  hooks.forEach(btn=>{
+    if(!btn) return;
+    const old=btn.onclick;
+    btn.onclick=async (e)=>{ await pullFromCloud(false); if(old) old.call(btn,e); };
+  });
+}
+function stopAutoSync(){ if(__autoTimer){clearInterval(__autoTimer);__autoTimer=null;} }
+
+/* ========= 启动 ========= */
+window.addEventListener('DOMContentLoaded', async ()=>{
+  if(localStorage.getItem('supaUrl')&&$('supaUrl')) $('supaUrl').value=localStorage.getItem('supaUrl');
+  if(localStorage.getItem('supaKey')&&$('supaKey')) $('supaKey').value=localStorage.getItem('supaKey');
+
+  if(initSB()){
+    const {data}=await sb.auth.getSession();
+    if(data.session){ currentUser=data.session.user; setDot('online','已登录'); }
+    else setDot('offline','未登录');
+  } else setDot('offline','未连接');
+
+  renderAuthUI();
+
+  if(currentUser){
+    startAutoSync();
+    await pullFromCloud(false);
+  }
+});
+
 </script>
 </body>
 </html>
