@@ -9456,8 +9456,8 @@ function init(){
   renderBackupList();
   document.getElementById("btnSave").onclick = saveSupaConfig;
   document.getElementById("btnTest").onclick = testSupa;
-  document.getElementById("btnPush").onclick = function(){ syncPush(true); };
-  document.getElementById("btnPull").onclick = function(){ syncPull(true); };
+  document.getElementById("btnPush").onclick = function(){ pushToCloud(false); };
+  document.getElementById("btnPull").onclick = function(){ pullFromCloud(true); };
 
   document.querySelectorAll(".tab").forEach(function(t){
     t.onclick = function(){
@@ -9482,8 +9482,8 @@ function init(){
   document.addEventListener("touchstart", unlockOnce);
 
   renderStats(); renderChart(); renderWrong();
-  if(g.supaUrl && g.supaKey) initSupa();
-  setTimeout(function(){ try{ if(g.supa) syncPull(false); }catch(e){ console.error("自动同步失败",e); g._syncing=false; updateSyncStatus("自动同步失败",false); } }, 3000);
+  if(g.supaUrl && g.supaKey) initSB();
+  setTimeout(function(){ try{ if(sb && currentUser) pullFromCloud(false); }catch(e){ console.error("自动同步失败",e); __syncing=false; setDot('offline','自动同步失败'); } }, 3000);
   setInterval(saveState, 5000);
   window.addEventListener("beforeunload", saveState);
 }
@@ -9696,7 +9696,7 @@ function checkAnswer(ans){
   else if(a) bucket.byUnit[uKey].w++;
   g.idx++;
   saveState(); renderStats(); renderChart(); renderWrong();
-  if(g.supaUrl && g.supaKey) debouncePush();
+  if(sb && currentUser) startAutoSync();
   g._displayLock = false;
   var delay = a ? 2000 : 800;
   var seq = g._seq||0;
@@ -9714,7 +9714,7 @@ function endQuiz(){
   document.getElementById("mainContainer").classList.remove("hidden");
   toast("听写已退出：正确 " + g.correct + " / 错误 " + g.wrong);
   saveState();
-  if(g.supaUrl && g.supaKey) syncPush(false);
+  if(sb && currentUser) pushToCloud(false);
 }
 
 // ===== 错词管理 =====
@@ -10108,474 +10108,6 @@ function importJSON(e){
 
 
 // ===== 同步超时保护（防止永久"进行中"）=====
-function syncWithTimeout(promise, ms){
-  var timeoutP = new Promise(function(_, reject){
-    setTimeout(function(){ reject(new Error("同步超时("+ms/1000+"秒)，请检查网络或Supabase配置")); }, ms);
-  });
-  return Promise.race([promise, timeoutP]);
-}
-
-// ===== Supabase 同步（完整版：Auth 登录 + 三表同步）=====
-
-// --- 登录态管理 ---
-function getUserId(){
-  try { return localStorage.getItem("supa_user_id") || null; }
-  catch(e) { return null; }
-}
-function setUserId(uid){
-  try { uid ? localStorage.setItem("supa_user_id", uid) : localStorage.removeItem("supa_user_id"); }
-  catch(e) {}
-}
-function getSession(){
-  try { return JSON.parse(localStorage.getItem("supa_session")||"null"); }
-  catch(e) { return null; }
-}
-function setSession(sess){
-  try { sess ? localStorage.setItem("supa_session", JSON.stringify(sess)) : localStorage.removeItem("supa_session"); }
-  catch(e) {}
-}
-
-// 渲染登录/已登录状态
-function renderAuthUI(){
-  var wrap = document.getElementById("authUI");
-  if(!wrap) return;
-  var uid = getUserId();
-  if(uid){
-    wrap.innerHTML =
-      '<span style="font-size:12px;color:#10b981">✅ 已登录</span> ' +
-      '<button class="btn btn-red" id="btnLogout" style="padding:4px 10px;font-size:12px;margin-left:6px">退出</button>';
-    var b = document.getElementById("btnLogout");
-    if(b) b.onclick = function(){ setUserId(null); setSession(null); g.supa=null; renderAuthUI(); updateSyncStatus("已退出",false); toast("已退出登录"); };
-  } else {
-    wrap.innerHTML =
-      '<input id="authEmail" type="email" placeholder="邮箱" style="width:140px;padding:5px;border:1px solid #d1d5db;border-radius:5px;font-size:13px">' +
-      '<input id="authPwd" type="password" placeholder="密码(≥6位)" style="width:120px;padding:5px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;margin-left:4px">' +
-      '<button class="btn btn-blue" id="btnRegister" style="padding:4px 10px;font-size:12px;margin-left:4px">注册</button>' +
-      '<button class="btn btn-green" id="btnLogin" style="padding:4px 10px;font-size:12px;margin-left:4px">登录</button>';
-    document.getElementById("btnRegister").onclick = doRegister;
-    document.getElementById("btnLogin").onclick = doLogin;
-  }
-}
-
-async function doRegister(){
-  var email = document.getElementById("authEmail").value.trim();
-  var pwd = document.getElementById("authPwd").value;
-  if(!email||!pwd){ toast("请填写邮箱和密码"); return; }
-  if(pwd.length<6){ toast("密码至少6位"); return; }
-  initSupa();
-  if(!g.supa){ toast("请先保存配置"); return; }
-  try{
-    var { data, error } = await g.supa.auth.signUp({ email:email, password:pwd });
-    if(error){ toast("注册失败："+error.message); return; }
-    if(data.user && !data.session){
-      toast("注册成功！请到邮箱点击验证链接，再回来登录");
-    } else if(data.session){
-      setSession(data.session); setUserId(data.user.id);
-      toast("注册并登录成功 ✅"); renderAuthUI(); updateSyncStatus("已登录",true);
-      syncPull(true);
-    }
-  }catch(e){ toast("注册异常："+e.message); }
-}
-
-async function doLogin(){
-  var email = document.getElementById("authEmail").value.trim();
-  var pwd = document.getElementById("authPwd").value;
-  if(!email||!pwd){ toast("请填写邮箱和密码"); return; }
-  initSupa();
-  if(!g.supa){ toast("请先保存配置"); return; }
-  try{
-    var { data, error } = await g.supa.auth.signInWithPassword({ email:email, password:pwd });
-    if(error){ toast("登录失败："+error.message); return; }
-    if(data.session && data.user){
-      setSession(data.session); setUserId(data.user.id);
-      toast("登录成功 ✅"); renderAuthUI(); updateSyncStatus("已登录",true);
-      // 登录后自动拉取云端数据
-      syncPull(true);
-    }
-  }catch(e){ toast("登录异常："+e.message); }
-}
-
-// 尝试用本地保存的 session 自动恢复登录
-async function tryRestoreSession(){
-  var sess = getSession();
-  if(!sess || !sess.access_token) return false;
-  initSupa();
-  if(!g.supa) return false;
-  try{
-    var { data, error } = await g.supa.auth.setSession({ access_token:sess.access_token, refresh_token:sess.refresh_token });
-    if(error || !data.session){ setSession(null); setUserId(null); return false; }
-    setSession(data.session); setUserId(data.user.id);
-    renderAuthUI(); updateSyncStatus("已登录(自动恢复)",true);
-    return true;
-  }catch(e){ return false; }
-}
-
-// --- 同步工具 ---
-function syncWithTimeout(promise, ms){
-  var timeoutP = new Promise(function(_, reject){
-    setTimeout(function(){ reject(new Error("同步超时("+Math.round(ms/1000)+"秒)")); }, ms);
-  });
-  return Promise.race([promise, timeoutP]);
-}
-
-function emergencyStopSync(){
-  g._syncing = false;
-  updateSyncStatus("已手动停止", false);
-  toast("同步已停止");
-}
-
-function updateSyncStatus(text, isOnline){
-  var dot = document.getElementById("syncDot");
-  var status = document.getElementById("syncStatus");
-  if(!dot||!status) return;
-  if(isOnline === true){ dot.className="sync-status-dot online"; status.innerHTML='<span class="sync-status-dot online"></span> '+text; }
-  else if(isOnline === false){ dot.className="sync-status-dot offline"; status.innerHTML='<span class="sync-status-dot offline"></span> '+text; }
-  else { dot.className="sync-status-dot syncing"; status.innerHTML='<span class="sync-status-dot syncing"></span> '+text; }
-}
-
-function initSupa(){
-  try{
-    if(!g.supaUrl||!g.supaKey){ updateSyncStatus("未配置",false); return; }
-    if(g.supa) return; // 已初始化
-    g.supa = window.supabase.createClient(g.supaUrl, g.supaKey);
-    updateSyncStatus("已连接",true);
-  }catch(e){ g.supa=null; updateSyncStatus("连接失败："+e.message,false); }
-}
-
-// --- 上传（三表全部推送）---
-async function syncPush(manual){
-  if(g._syncing){ if(manual) toast("同步中，请稍后"); return; }
-  if(!g.supaUrl||!g.supaKey){ if(manual) toast("请先填写并保存配置"); return; }
-  var uid = getUserId();
-  if(!uid){ if(manual) toast("请先登录"); return; }
-  initSupa();
-  if(!g.supa){ if(manual) toast("初始化失败"); return; }
-  g._syncing = true;
-  updateSyncStatus("上传中...",null);
-  try{
-    // 1) vocab_progress：把 g.stats 按「日期 × 课本|单元」展开上传
-    // g.stats 结构：stats[日期] = { c, w, byUnit: { "课本|单元": {c,w} } }
-    // book/unit 从 byUnit 的键解析；word 列编码为 "课本|单元|日期"，
-    // 保证不同日期的记录不会因冲突键互相覆盖
-    var progressRows = [];
-    Object.keys(g.stats||{}).forEach(function(k){
-      if(!isStatsDateKey(k)) return; // 跳过 _last_sync 及历史脏键
-      var st = g.stats[k]; if(!st||!st.byUnit) return;
-      Object.keys(st.byUnit).forEach(function(uk){
-        var u = st.byUnit[uk];
-        // uk 形如 "课本|单元"
-        var parts = uk.split("|");
-        var book = parts.length>1 ? parts[0] : g.book;
-        var unit = parts.length>1 ? parts[1] : parts[0];
-        progressRows.push({
-          user_id:uid, book:book, unit:unit, word:uk+"|"+k,
-          correct_count: (u.c||0), wrong_count:(u.w||0),
-          last_practiced: k+"T00:00:00.000Z"
-        });
-      });
-    });
-    if(progressRows.length>0){
-      var r1 = await syncWithTimeout(
-        g.supa.from('vocab_progress').upsert(progressRows, { onConflict:'user_id,book,unit,word', ignoreDuplicates:false }),
-        20000
-      );
-      if(r1.error) console.error("progress 上传错误",r1.error);
-    }
-    // 2) wrong_words
-    var wrongRows = [];
-    Object.keys(g.wrongBook||{}).forEach(function(w){
-      var wd = g.wrongBook[w];
-      wrongRows.push({
-        user_id:uid, word:w,
-        meaning:(wd.meaning||""), phonetic:(wd.phonetic||""), pos:(wd.pos||""),
-        last_input:(wd.lastInput||""), wrong_count:(wd.count||1),
-        fixed:(!!wd.fixed)
-      });
-    });
-    if(wrongRows.length>0){
-      var r2 = await syncWithTimeout(
-        g.supa.from('wrong_words').upsert(wrongRows, { onConflict:'user_id,word', ignoreDuplicates:false }),
-        20000
-      );
-      if(r2.error) console.error("wrong 上传错误",r2.error);
-    }
-    // 3) study_sessions（按日期）
-    var today = new Date().toISOString().slice(0,10);
-    var todayStats = { user_id:uid, date:today,
-      correct_count:(g.totalCorrect||0), wrong_count:(g.totalWrong||0),
-      words_practiced:((g.totalCorrect||0)+(g.totalWrong||0)),
-      mastered_words:JSON.stringify(g.masteredWords||{})
-    };
-    var r3 = await syncWithTimeout(
-      g.supa.from('study_sessions').upsert([todayStats], { onConflict:'user_id,date', ignoreDuplicates:false }),
-      15000
-    );
-    if(r3.error) console.error("sessions 上传错误",r3.error);
-
-    if(manual) toast("上传成功 ✅（进度"+progressRows.length+"条 / 错词"+wrongRows.length+"条）");
-    updateSyncStatus("已同步 "+new Date().toLocaleTimeString(),true);
-  }catch(e){
-    console.error("上传异常",e);
-    if(manual) toast("上传失败："+e.message);
-    updateSyncStatus("上传失败",false);
-  }finally{ g._syncing=false; }
-}
-
-// --- 下载（三表全部拉取 + 合并）---
-async function syncPull(manual){
-  if(g._syncing){ if(manual) toast("同步中，请稍后"); return; }
-  var uid = getUserId();
-  if(!uid){ if(manual) toast("请先登录"); return; }
-  if(!g.supa){ initSupa(); }
-  if(!g.supa){ if(manual) toast("未连接"); return; }
-  g._syncing = true;
-  updateSyncStatus("下载中...",null);
-  try{
-    var merged = false;
-    // 1) vocab_progress
-    var r1 = await syncWithTimeout(
-      g.supa.from('vocab_progress').select('*').eq('user_id',uid),
-      20000
-    );
-    if(r1.data && r1.data.length>0){
-      var touchedDates = {};
-      r1.data.forEach(function(r){
-        // 解析 word 列：新版形如 "课本|单元|日期"，旧版形如 "课本|单元"
-        var wParts = String(r.word||"").split("|");
-        var dateKey = "";
-        if(wParts.length>=3 && isStatsDateKey(wParts[wParts.length-1])){
-          dateKey = wParts.pop();
-        } else {
-          dateKey = String(r.last_practiced||"").slice(0,10);
-        }
-        if(!isStatsDateKey(dateKey)) dateKey = new Date().toISOString().slice(0,10);
-        var uk = wParts.join("|") || statsKey(String(r.book||g.book), String(r.unit||""));
-        var bucket = getStatsBucket(dateKey);
-        bucket.byUnit[uk] = bucket.byUnit[uk] || {c:0,w:0};
-        // 取最大值合并：上传的是累计值，重复拉取不会叠加，且双方数据都不丢失
-        if((r.correct_count||0) > bucket.byUnit[uk].c) bucket.byUnit[uk].c = (r.correct_count||0);
-        if((r.wrong_count||0) > bucket.byUnit[uk].w) bucket.byUnit[uk].w = (r.wrong_count||0);
-        touchedDates[dateKey] = true;
-      });
-      // 合并后按 byUnit 重新汇总被触碰日期桶的总量，保持 c/w = Σ byUnit
-      Object.keys(touchedDates).forEach(function(k){
-        var st = g.stats[k]; if(!st) return;
-        var sc=0, sw=0, has=false;
-        Object.keys(st.byUnit||{}).forEach(function(uk){ has=true; sc += (st.byUnit[uk].c||0); sw += (st.byUnit[uk].w||0); });
-        if(has){ st.c = sc; st.w = sw; }
-      });
-      merged = true;
-    }
-    // 2) wrong_words
-    var r2 = await syncWithTimeout(
-      g.supa.from('wrong_words').select('*').eq('user_id',uid),
-      20000
-    );
-    if(r2.data && r2.data.length>0){
-      r2.data.forEach(function(r){
-        if(!g.wrongBook[r.word]){ g.wrongBook[r.word]={count:0,fixed:false,updated:Date.now(),lastInput:"",meaning:"",phonetic:"",pos:""}; }
-        if(r.wrong_count>g.wrongBook[r.word].count){ g.wrongBook[r.word].count=r.wrong_count; g.wrongBook[r.word].fixed=!!r.fixed; g.wrongBook[r.word].updated=Date.now(); if(r.last_input) g.wrongBook[r.word].lastInput=r.last_input; if(r.meaning) g.wrongBook[r.word].meaning=r.meaning; if(r.phonetic) g.wrongBook[r.word].phonetic=r.phonetic; if(r.pos) g.wrongBook[r.word].pos=r.pos; merged=true; }
-      });
-    }
-    // 3) study_sessions（用于统计图表）
-    var r3 = await syncWithTimeout(
-      g.supa.from('study_sessions').select('*').eq('user_id',uid).order('date',{ascending:false}).limit(90),
-      15000
-    );
-    if(r3.data && r3.data.length>0){
-      // 把云端的累计值合并到今日统计
-      var latest = r3.data[0];
-      if(latest.correct_count>g.totalCorrect){ g.totalCorrect=latest.correct_count; merged=true; }
-      if(latest.wrong_count>g.totalWrong){ g.totalWrong=latest.wrong_count; merged=true; }
-      // 恢复 masteredWords（取最新一条记录中的 JSON）
-      if(latest.mastered_words){
-        try{
-          var mw = JSON.parse(latest.mastered_words);
-          if(mw && typeof mw === "object"){
-            // 合并：本地优先，云端补充
-            Object.keys(mw).forEach(function(k){
-              if(!g.masteredWords[k]) g.masteredWords[k] = mw[k];
-              else {
-                // 合并单词数组，去重
-                var localSet = new Set(g.masteredWords[k]);
-                mw[k].forEach(function(w){ localSet.add(w); });
-                g.masteredWords[k] = Array.from(localSet);
-              }
-            });
-            merged = true;
-          }
-        }catch(e){ console.warn("解析 mastered_words 失败",e); }
-      }
-    }
-    if(merged){
-      saveState(); renderStats(); renderChart(); renderWrong();
-      if(manual) toast("已同步云端数据 ✅");
-    } else { if(manual) toast("本地已是最新"); }
-    updateSyncStatus("已同步 "+new Date().toLocaleTimeString(),true);
-  }catch(e){
-    console.error("下载异常",e);
-    if(manual) toast("下载失败："+e.message);
-    updateSyncStatus("下载失败",false);
-  }finally{ g._syncing=false; }
-}
-
-// --- 配置保存 / 连接测试 ---
-function saveSupaConfig(){
-  g.supaUrl = document.getElementById("supaUrl").value.trim();
-  g.supaKey = document.getElementById("supaKey").value.trim();
-  // 去掉 URL 末尾多余的斜杠
-  if(g.supaUrl.endsWith("/")) g.supaUrl = g.supaUrl.slice(0,-1);
-  try{ localStorage.setItem("supa_url", g.supaUrl); localStorage.setItem("supa_key", g.supaKey); }catch(e){}
-  g.supa = null; // 强制下次重新初始化
-  initSupa();
-  renderAuthUI();
-  toast("配置已保存");
-}
-
-async function testSupa(){
-  if(!g.supaUrl||!g.supaKey){ toast("请先填URL和Key"); return; }
-  initSupa();
-  if(!g.supa){ toast("初始化失败"); return; }
-  try{
-    var r = await syncWithTimeout(g.supa.from('vocab_progress').select('count',{count:'exact',head:true}), 10000);
-    if(r.error){ if(r.error.code==='42P01') toast("表不存在，请执行建表SQL"); else toast("连接失败："+r.error.message); }
-    else { toast("连接成功 ✅"); updateSyncStatus("已连接",true); }
-  }catch(e){ toast("连接失败："+e.message); }
-}
-
-var _dp;
-function debouncePush(){ clearTimeout(_dp); _dp = setTimeout(function(){ var uid=getUserId(); if(uid) syncPush(false); }, 5000); }
-
-// 页面加载后尝试自动恢复登录 + 自动拉取
-setTimeout(function(){
-  tryRestoreSession().then(function(ok){
-    if(ok){ syncPull(false); }
-  });
-}, 1500);
-
-
-
-// ===== 自动备份 =====
-var AUTO_BACKUP_MAX = 10; // 保留最近10份备份
-function autoBackup(){
-  try{
-    var raw = localStorage.getItem("vocab_auto_backups")||"[]";
-    var list = JSON.parse(raw);
-    if(!Array.isArray(list)) list = [];
-    var snap = {book:g.book, unit:g.unit, idx:g.idx, correct:g.correct, wrong:g.wrong, totalCorrect:g.totalCorrect, totalWrong:g.totalWrong, wrongBook:g.wrongBook, stats:g.stats, masteredWords:g.masteredWords, mode:g.mode, version:2};
-    var ts = Date.now();
-    list.push({ts:ts, label:formatBackupLabel(ts), data:snap});
-    if(list.length > AUTO_BACKUP_MAX) list = list.slice(list.length - AUTO_BACKUP_MAX);
-    localStorage.setItem("vocab_auto_backups", JSON.stringify(list));
-    localStorage.setItem("vocab_last_backup_ts", String(ts));
-    // 若备份面板正展开，刷新显示
-    var panel = document.getElementById("backupPanel");
-    if(panel && !panel.classList.contains("hidden")) renderBackupList();
-  }catch(e){ console.warn("autoBackup failed:", e); }
-}
-function formatBackupLabel(ts){
-  var d = new Date(ts);
-  var pad = function(n){ return n<10?"0"+n:""+n; };
-  return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+" "+pad(d.getHours())+":"+pad(d.getMinutes());
-}
-function getAutoBackups(){
-  try{ var list = JSON.parse(localStorage.getItem("vocab_auto_backups")||"[]"); return Array.isArray(list)?list:[]; }
-  catch(e){ return []; }
-}
-// 渲染备份列表
-function renderBackupList(){
-  var box = document.getElementById("backupList");
-  var lastTs = document.getElementById("backupLastTs");
-  if(!box) return;
-  var list = getAutoBackups().slice().sort(function(a,b){ return b.ts-a.ts; });
-  if(list.length===0){
-    box.innerHTML = '<div style="padding:10px;color:#94a3b8;font-size:12px">暂无自动备份。每次保存数据时会自动备份（间隔≥60秒）。</div>';
-  } else {
-    box.innerHTML = "";
-    list.forEach(function(b){
-      var row = document.createElement("div");
-      row.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid #f8fafc;font-size:13px;flex-wrap:wrap";
-      var info = document.createElement("span");
-      info.style.cssText = "flex:1;min-width:140px;color:#334155";
-      var cnt = (b.data && b.data.wrongBook)? Object.keys(b.data.wrongBook).length : 0;
-      info.textContent = b.label + "  (错词 " + cnt + " 条)";
-      var btnRestore = document.createElement("button");
-      btnRestore.className = "btn btn-blue"; btnRestore.style.cssText = "padding:3px 8px;font-size:12px;margin:0";
-      btnRestore.textContent = "恢复";
-      btnRestore.onclick = function(){ restoreFromBackup(b.ts); };
-      var btnDel = document.createElement("button");
-      btnDel.className = "btn btn-red"; btnDel.style.cssText = "padding:3px 8px;font-size:12px;margin:0";
-      btnDel.textContent = "删除";
-      btnDel.onclick = function(){
-        if(!confirm("删除备份："+b.label+"？")) return;
-        var arr = getAutoBackups();
-        arr = arr.filter(function(x){ return x.ts !== b.ts; });
-        localStorage.setItem("vocab_auto_backups", JSON.stringify(arr));
-        renderBackupList(); toast("已删除该备份");
-      };
-      row.appendChild(info); row.appendChild(btnRestore); row.appendChild(btnDel);
-      box.appendChild(row);
-    });
-  }
-  // 最近备份时间
-  if(lastTs){
-    var last = parseInt(localStorage.getItem("vocab_last_backup_ts")||localStorage.getItem("vocab_last_back_up_ts")||"0");
-    // 兼容旧 key
-    if(!last) last = parseInt(localStorage.getItem("vocab_last_backup_ts")||"0");
-    lastTs.textContent = last ? "最近备份：" + formatBackupLabel(last) : "尚未自动备份";
-  }
-}
-// 从指定备份恢复数据
-function restoreFromBackup(ts){
-  var list = getAutoBackups();
-  var b = list.find(function(x){ return x.ts === ts; });
-  if(!b || !b.data){ toast("备份不存在"); return; }
-  if(!confirm("确认恢复到【"+b.label+"】的备份？\n当前未保存的数据会被覆盖。")) return;
-  var d = b.data;
-  if(d.wrongBook){ g.wrongBook = d.wrongBook; }
-  if(d.stats){ g.stats = d.stats; }
-  if(typeof d.correct==="number") g.correct = d.correct;
-  if(typeof d.wrong==="number") g.wrong = d.wrong;
-  if(typeof d.totalCorrect==="number") g.totalCorrect = d.totalCorrect;
-  if(typeof d.totalWrong==="number") g.totalWrong = d.totalWrong;
-  if(d.masteredWords && typeof d.masteredWords === "object") g.masteredWords = d.masteredWords;
-  if(d.book) g.book = d.book;
-  if(d.unit) g.unit = d.unit;
-  saveState(); renderStats(); renderChart(); renderWrong(); renderBackupList();
-  toast("已从【"+b.label+"】恢复 ✅");
-}
-// 启动时检测旧版数据并提示
-function checkLegacyData(){
-  // 如果有旧版 vocab_data 但当前 vocab_state 为空，提示迁移
-  var legacy = localStorage.getItem("vocab_data");
-  var cur = localStorage.getItem("vocab_state");
-  if(legacy && !cur){
-    try{
-      var d = JSON.parse(legacy);
-      if(confirm("检测到旧版数据（含错词本和统计），是否导入到当前版本？")){
-        if(d.wrongBook) g.wrongBook = d.wrongBook;
-        if(d.stats) g.stats = d.stats;
-        if(typeof d.correct==="number") g.correct = d.correct;
-        if(typeof d.wrong==="number") g.wrong = d.wrong;
-        if(typeof d.totalCorrect==="number") g.totalCorrect = d.totalCorrect;
-        if(typeof d.totalWrong==="number") g.totalWrong = d.totalWrong;
-        saveState(); renderStats(); renderChart(); renderWrong();
-        toast("旧版数据已迁移 ✅");
-      }
-    }catch(e){}
-  }
-}
-
-// ===== 保存状态（含自动备份）=====
-function saveState(){
-  try{
-    var s = {book:g.book, unit:g.unit, idx:g.idx, correct:g.correct, wrong:g.wrong, totalCorrect:g.totalCorrect, totalWrong:g.totalWrong, wrongBook:g.wrongBook, stats:g.stats, masteredWords:g.masteredWords, mode:g.mode, version:2};
-    localStorage.setItem("vocab_state", JSON.stringify(s));
-    // 自动备份（节流：至少间隔60秒才写一份新备份）
-    var lastTs = parseInt(localStorage.getItem("vocab_last_backup_ts")||"0");
-    if(Date.now() - lastTs > 60000) autoBackup();
-  }catch(e){}
-}
 
 function toast(t){
   var d = document.createElement("div");
@@ -10855,8 +10387,8 @@ document.addEventListener('touchmove', function(e){
 
 document.addEventListener('visibilitychange', function(){
   if(document.visibilityState === 'visible'){
-    g._syncing = false; // 从后台回来强制解除锁定
-    if(g.supa) { try{ g.supa.auth.getSession(); }catch(e){} }
+    __syncing = false; // 从后台回来强制解除锁定
+    if(sb) { try{ sb.auth.getSession(); }catch(e){} }
   }
 });
 
@@ -10875,6 +10407,29 @@ document.addEventListener('visibilitychange', function(){
 // ===== 启动 =====
 init();
 console.log("✅ 单词背诵应用已启动 (含自定义单词表+月统计)");
+
+
+/* ============================================================
+   多设备同步 - Supabase 建表 SQL
+   在 Supabase → SQL Editor 中执行一次即可
+   ============================================================
+   create table if not exists user_snapshot (
+     user_id uuid primary key references auth.users(id) on delete cascade,
+     data jsonb not null default '{}'::jsonb,
+     updated_at timestamptz default now()
+   );
+   alter table user_snapshot enable row level security;
+   create policy "owner_rw" on user_snapshot
+     for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+   create or replace function touch_updated()
+   returns trigger language plpgsql as $$
+   begin new.updated_at = now(); return new; end; $$;
+   create trigger user_snapshot_touch before update on user_snapshot
+     for each row execute function touch_updated();
+   -- 启用 Email 登录：Authentication → Providers → Email → 开启
+   -- 关闭邮件确认：Authentication → Settings → "Confirm email" 关掉（方便测试）
+   ============================================================ */
+
 
 /* ========= 全局 ========= */
 let sb = null;
@@ -11000,7 +10555,8 @@ rebind('btnSave', async ()=>{
   localStorage.setItem('supaKey',$('supaKey').value);
   sb=supabase.createClient($('supaUrl').value.trim(),$('supaKey').value.trim());
   const {data}=await sb.auth.getSession();
-  if(data.session){currentUser=data.session.user;renderAuthUI();setDot('online','已登录');}
+  if(data.session){currentUser=data.session.user;renderAuthUI();setDot('online','已登录');startAutoSync();}
+  else { renderAuthUI(); setDot('offline','未登录'); }
   toast('💾 配置已保存');
 });
 
@@ -11035,6 +10591,9 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   if(currentUser){
     startAutoSync();
     await pullFromCloud(false);
+  } else {
+    // 没登录也允许手动操作，但停止任何残留定时器
+    stopAutoSync();
   }
 });
 
