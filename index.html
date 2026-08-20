@@ -9261,7 +9261,7 @@ var g = {
   wrongBook: {}, stats: {}, rangeMode: "day",
   // masteredWords: { "book|unit": ["word1","word2",...] } 记录已掌握的单词，下次听写自动跳过
   masteredWords: {},
-  supaUrl: localStorage.getItem("supa_url")||"", supaKey: localStorage.getItem("supa_key")||"", supa: null,
+  supaUrl: localStorage.getItem("supaUrl")||"", supaKey: localStorage.getItem("supaKey")||"", supa: null,
   _t: null, _abort: false, _seq: 0, _syncing: false
 };
 // stats 结构: stats[date] = { c:总数, w:总数, byUnit: { "book|unit": {c,w} } }
@@ -9454,10 +9454,7 @@ function init(){
   // 启动时检测旧版数据
   checkLegacyData();
   renderBackupList();
-  document.getElementById("btnSave").onclick = saveSupaConfig;
-  document.getElementById("btnTest").onclick = testSupa;
-  document.getElementById("btnPush").onclick = function(){ pushToCloud(false); };
-  document.getElementById("btnPull").onclick = function(){ pullFromCloud(true); };
+  // 同步按钮绑定已统一在下方 rebind() 中处理，此处不再重复绑定（避免覆盖为 undefined）
 
   document.querySelectorAll(".tab").forEach(function(t){
     t.onclick = function(){
@@ -10537,27 +10534,34 @@ async function pullFromCloud(reloadAfter){
 }
 
 /* ========= 接管原按钮 ========= */
-function rebind(id,fn){const b=$(id);if(!b)return;const c=b.cloneNode(true);b.parentNode.replaceChild(c,b);c.onclick=fn;}
+function rebind(id,fn){const b=$(id);if(!b){console.warn('[rebind] 找不到',id);return;}const c=b.cloneNode(true);c.onclick=null;b.parentNode.replaceChild(c,b);c.onclick=fn;console.log('[rebind] ✅',id);}
 rebind('btnTest', async ()=>{
   const url=($('supaUrl').value||'').trim(), key=($('supaKey').value||'').trim();
   if(!url||!key) return alert('先填 URL 和 Key');
-  sb=supabase.createClient(url,key);
-  const {data,error}=await sb.auth.getSession();
-  localStorage.setItem('supaUrl',url);localStorage.setItem('supaKey',key);
-  if(error) return alert('连接失败:'+error.message);
-  if(data.session){currentUser=data.session.user;renderAuthUI();setDot('online','已登录');}
-  toast('✅ 连接正常 · '+(data.session?'已自动登录':'请登录'));
+  try{
+    sb=supabase.createClient(url,key);
+    const {data,error}=await sb.auth.getSession();
+    localStorage.setItem('supaUrl',url);localStorage.setItem('supaKey',key);
+    if(error) return alert('连接失败:'+error.message);
+    if(data.session){currentUser=data.session.user;renderAuthUI();setDot('online','已登录');startAutoSync();}
+    toast('✅ 连接正常 · '+(data.session?'已自动登录':'请登录'));
+  }catch(e){ alert('连接异常: '+e.message); console.error(e); }
 });
 rebind('btnPush', ()=>pushToCloud(false));
 rebind('btnPull', ()=>pullFromCloud(true));
 rebind('btnSave', async ()=>{
-  localStorage.setItem('supaUrl',$('supaUrl').value);
-  localStorage.setItem('supaKey',$('supaKey').value);
-  sb=supabase.createClient($('supaUrl').value.trim(),$('supaKey').value.trim());
-  const {data}=await sb.auth.getSession();
-  if(data.session){currentUser=data.session.user;renderAuthUI();setDot('online','已登录');startAutoSync();}
-  else { renderAuthUI(); setDot('offline','未登录'); }
-  toast('💾 配置已保存');
+  const u=$('supaUrl').value.trim(), k=$('supaKey').value.trim();
+  if(!u||!k) return alert('请先填写 URL 和 Key');
+  localStorage.setItem('supaUrl',u);
+  localStorage.setItem('supaKey',k);
+  try{
+    sb=supabase.createClient(u,k);
+    const {data,error}=await sb.auth.getSession();
+    if(error) return alert('连接失败: '+error.message);
+    if(data.session){currentUser=data.session.user;renderAuthUI();setDot('online','已登录');startAutoSync();}
+    else { renderAuthUI(); setDot('offline','未登录，请先注册/登录'); }
+    toast('💾 配置已保存');
+  }catch(e){ alert('保存异常: '+e.message); console.error(e); }
 });
 
 /* ========= 自动同步核心 ========= */
@@ -10582,9 +10586,9 @@ window.addEventListener('DOMContentLoaded', async ()=>{
 
   if(initSB()){
     const {data}=await sb.auth.getSession();
-    if(data.session){ currentUser=data.session.user; setDot('online','已登录'); }
-    else setDot('offline','未登录');
-  } else setDot('offline','未连接');
+    if(data && data.session){ currentUser=data.session.user; setDot('online','已登录'); }
+    else { currentUser=null; setDot('offline','未登录'); }
+  } else { sb=null; currentUser=null; setDot('offline','未连接 · 请填写配置'); }
 
   renderAuthUI();
 
@@ -10592,7 +10596,6 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     startAutoSync();
     await pullFromCloud(false);
   } else {
-    // 没登录也允许手动操作，但停止任何残留定时器
     stopAutoSync();
   }
 });
