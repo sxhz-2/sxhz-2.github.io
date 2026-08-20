@@ -9261,7 +9261,7 @@ var g = {
   wrongBook: {}, stats: {}, rangeMode: "day",
   // masteredWords: { "book|unit": ["word1","word2",...] } 记录已掌握的单词，下次听写自动跳过
   masteredWords: {},
-  supaUrl: localStorage.getItem("supa_url")||"", supaKey: localStorage.getItem("supa_key")||"", supa: null,
+  supaUrl: localStorage.getItem("supaUrl")||"", supaKey: localStorage.getItem("supaKey")||"", supa: null,
   _t: null, _abort: false, _seq: 0, _syncing: false
 };
 // stats 结构: stats[date] = { c:总数, w:总数, byUnit: { "book|unit": {c,w} } }
@@ -9454,8 +9454,10 @@ function init(){
   // 启动时检测旧版数据
   checkLegacyData();
   renderBackupList();
-  // 同步按钮改用文件末尾的 rebind 绑定（避免与已删除的旧函数冲突）
-  // btnSave / btnTest / btnPush / btnPull 在 DOMContentLoaded 中统一绑定
+  document.getElementById("btnSave").onclick = saveSupaConfig;
+  document.getElementById("btnTest").onclick = testSupa;
+  document.getElementById("btnPush").onclick = function(){ syncPush(true); };
+  document.getElementById("btnPull").onclick = function(){ syncPull(true); };
 
   document.querySelectorAll(".tab").forEach(function(t){
     t.onclick = function(){
@@ -9480,9 +9482,8 @@ function init(){
   document.addEventListener("touchstart", unlockOnce);
 
   renderStats(); renderChart(); renderWrong();
-  // 初始化与自动拉取改由 DOMContentLoaded 中的 initSB() + pullFromCloud 统一处理
-  if(g.supaUrl && g.supaKey) initSB();
-  setTimeout(function(){ try{ if(sb && currentUser) pushToCloud(true); }catch(e){ console.error("自动同步失败",e); __syncing=false; setDot('offline','自动同步失败'); } }, 3000);
+  if(g.supaUrl && g.supaKey) initSupa();
+  setTimeout(function(){ try{ if(g.supa) syncPull(false); }catch(e){ console.error("自动同步失败",e); g._syncing=false; updateSyncStatus("自动同步失败",false); } }, 3000);
   setInterval(saveState, 5000);
   window.addEventListener("beforeunload", saveState);
 }
@@ -9713,7 +9714,7 @@ function endQuiz(){
   document.getElementById("mainContainer").classList.remove("hidden");
   toast("听写已退出：正确 " + g.correct + " / 错误 " + g.wrong);
   saveState();
-  if(g.supaUrl && g.supaKey) pushToCloud(true);
+  if(g.supaUrl && g.supaKey) syncPush(false);
 }
 
 // ===== 错词管理 =====
@@ -10104,6 +10105,353 @@ function importJSON(e){
   };
   r.readAsText(f);
 }
+
+
+// ===== 同步超时保护（防止永久"进行中"）=====
+function syncWithTimeout(promise, ms){
+  var timeoutP = new Promise(function(_, reject){
+    setTimeout(function(){ reject(new Error("同步超时("+ms/1000+"秒)，请检查网络或Supabase配置")); }, ms);
+  });
+  return Promise.race([promise, timeoutP]);
+}
+
+// ===== Supabase 同步（完整版：Auth 登录 + 三表同步）=====
+
+// --- 登录态管理 ---
+function getUserId(){
+  try { return localStorage.getItem("supa_user_id") || null; }
+  catch(e) { return null; }
+}
+function setUserId(uid){
+  try { uid ? localStorage.setItem("supa_user_id", uid) : localStorage.removeItem("supa_user_id"); }
+  catch(e) {}
+}
+function getSession(){
+  try { return JSON.parse(localStorage.getItem("supa_session")||"null"); }
+  catch(e) { return null; }
+}
+function setSession(sess){
+  try { sess ? localStorage.setItem("supa_session", JSON.stringify(sess)) : localStorage.removeItem("supa_session"); }
+  catch(e) {}
+}
+
+// 渲染登录/已登录状态
+function renderAuthUI(){
+  var wrap = document.getElementById("authUI");
+  if(!wrap) return;
+  var uid = getUserId();
+  if(uid){
+    wrap.innerHTML =
+      '<span style="font-size:12px;color:#10b981">✅ 已登录</span> ' +
+      '<button class="btn btn-red" id="btnLogout" style="padding:4px 10px;font-size:12px;margin-left:6px">退出</button>';
+    var b = document.getElementById("btnLogout");
+    if(b) b.onclick = function(){ setUserId(null); setSession(null); g.supa=null; renderAuthUI(); updateSyncStatus("已退出",false); toast("已退出登录"); };
+  } else {
+    wrap.innerHTML =
+      '<input id="authEmail" type="email" placeholder="邮箱" style="width:140px;padding:5px;border:1px solid #d1d5db;border-radius:5px;font-size:13px">' +
+      '<input id="authPwd" type="password" placeholder="密码(≥6位)" style="width:120px;padding:5px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;margin-left:4px">' +
+      '<button class="btn btn-blue" id="btnRegister" style="padding:4px 10px;font-size:12px;margin-left:4px">注册</button>' +
+      '<button class="btn btn-green" id="btnLogin" style="padding:4px 10px;font-size:12px;margin-left:4px">登录</button>';
+    document.getElementById("btnRegister").onclick = doRegister;
+    document.getElementById("btnLogin").onclick = doLogin;
+  }
+}
+
+async function doRegister(){
+  var email = document.getElementById("authEmail").value.trim();
+  var pwd = document.getElementById("authPwd").value;
+  if(!email||!pwd){ toast("请填写邮箱和密码"); return; }
+  if(pwd.length<6){ toast("密码至少6位"); return; }
+  initSupa();
+  if(!g.supa){ toast("请先保存配置"); return; }
+  try{
+    var { data, error } = await g.supa.auth.signUp({ email:email, password:pwd });
+    if(error){ toast("注册失败："+error.message); return; }
+    if(data.user && !data.session){
+      toast("注册成功！请到邮箱点击验证链接，再回来登录");
+    } else if(data.session){
+      setSession(data.session); setUserId(data.user.id);
+      toast("注册并登录成功 ✅"); renderAuthUI(); updateSyncStatus("已登录",true);
+      syncPull(true);
+    }
+  }catch(e){ toast("注册异常："+e.message); }
+}
+
+async function doLogin(){
+  var email = document.getElementById("authEmail").value.trim();
+  var pwd = document.getElementById("authPwd").value;
+  if(!email||!pwd){ toast("请填写邮箱和密码"); return; }
+  initSupa();
+  if(!g.supa){ toast("请先保存配置"); return; }
+  try{
+    var { data, error } = await g.supa.auth.signInWithPassword({ email:email, password:pwd });
+    if(error){ toast("登录失败："+error.message); return; }
+    if(data.session && data.user){
+      setSession(data.session); setUserId(data.user.id);
+      toast("登录成功 ✅"); renderAuthUI(); updateSyncStatus("已登录",true);
+      // 登录后自动拉取云端数据
+      syncPull(true);
+    }
+  }catch(e){ toast("登录异常："+e.message); }
+}
+
+// 尝试用本地保存的 session 自动恢复登录
+async function tryRestoreSession(){
+  var sess = getSession();
+  if(!sess || !sess.access_token) return false;
+  initSupa();
+  if(!g.supa) return false;
+  try{
+    var { data, error } = await g.supa.auth.setSession({ access_token:sess.access_token, refresh_token:sess.refresh_token });
+    if(error || !data.session){ setSession(null); setUserId(null); return false; }
+    setSession(data.session); setUserId(data.user.id);
+    renderAuthUI(); updateSyncStatus("已登录(自动恢复)",true);
+    return true;
+  }catch(e){ return false; }
+}
+
+// --- 同步工具 ---
+function syncWithTimeout(promise, ms){
+  var timeoutP = new Promise(function(_, reject){
+    setTimeout(function(){ reject(new Error("同步超时("+Math.round(ms/1000)+"秒)")); }, ms);
+  });
+  return Promise.race([promise, timeoutP]);
+}
+
+function emergencyStopSync(){
+  g._syncing = false;
+  updateSyncStatus("已手动停止", false);
+  toast("同步已停止");
+}
+
+function updateSyncStatus(text, isOnline){
+  var dot = document.getElementById("syncDot");
+  var status = document.getElementById("syncStatus");
+  if(!dot||!status) return;
+  if(isOnline === true){ dot.className="sync-status-dot online"; status.innerHTML='<span class="sync-status-dot online"></span> '+text; }
+  else if(isOnline === false){ dot.className="sync-status-dot offline"; status.innerHTML='<span class="sync-status-dot offline"></span> '+text; }
+  else { dot.className="sync-status-dot syncing"; status.innerHTML='<span class="sync-status-dot syncing"></span> '+text; }
+}
+
+function initSupa(){
+  try{
+    if(!g.supaUrl||!g.supaKey){ updateSyncStatus("未配置",false); return; }
+    if(g.supa) return; // 已初始化
+    g.supa = window.supabase.createClient(g.supaUrl, g.supaKey);
+    updateSyncStatus("已连接",true);
+  }catch(e){ g.supa=null; updateSyncStatus("连接失败："+e.message,false); }
+}
+
+// --- 上传（三表全部推送）---
+async function syncPush(manual){
+  if(g._syncing){ if(manual) toast("同步中，请稍后"); return; }
+  if(!g.supaUrl||!g.supaKey){ if(manual) toast("请先填写并保存配置"); return; }
+  var uid = getUserId();
+  if(!uid){ if(manual) toast("请先登录"); return; }
+  initSupa();
+  if(!g.supa){ if(manual) toast("初始化失败"); return; }
+  g._syncing = true;
+  updateSyncStatus("上传中...",null);
+  try{
+    // 1) vocab_progress：把 g.stats 按「日期 × 课本|单元」展开上传
+    // g.stats 结构：stats[日期] = { c, w, byUnit: { "课本|单元": {c,w} } }
+    // book/unit 从 byUnit 的键解析；word 列编码为 "课本|单元|日期"，
+    // 保证不同日期的记录不会因冲突键互相覆盖
+    var progressRows = [];
+    Object.keys(g.stats||{}).forEach(function(k){
+      if(!isStatsDateKey(k)) return; // 跳过 _last_sync 及历史脏键
+      var st = g.stats[k]; if(!st||!st.byUnit) return;
+      Object.keys(st.byUnit).forEach(function(uk){
+        var u = st.byUnit[uk];
+        // uk 形如 "课本|单元"
+        var parts = uk.split("|");
+        var book = parts.length>1 ? parts[0] : g.book;
+        var unit = parts.length>1 ? parts[1] : parts[0];
+        progressRows.push({
+          user_id:uid, book:book, unit:unit, word:uk+"|"+k,
+          correct_count: (u.c||0), wrong_count:(u.w||0),
+          last_practiced: k+"T00:00:00.000Z"
+        });
+      });
+    });
+    if(progressRows.length>0){
+      var r1 = await syncWithTimeout(
+        g.supa.from('vocab_progress').upsert(progressRows, { onConflict:'user_id,book,unit,word', ignoreDuplicates:false }),
+        20000
+      );
+      if(r1.error) console.error("progress 上传错误",r1.error);
+    }
+    // 2) wrong_words
+    var wrongRows = [];
+    Object.keys(g.wrongBook||{}).forEach(function(w){
+      var wd = g.wrongBook[w];
+      wrongRows.push({
+        user_id:uid, word:w,
+        meaning:(wd.meaning||""), phonetic:(wd.phonetic||""), pos:(wd.pos||""),
+        last_input:(wd.lastInput||""), wrong_count:(wd.count||1),
+        fixed:(!!wd.fixed)
+      });
+    });
+    if(wrongRows.length>0){
+      var r2 = await syncWithTimeout(
+        g.supa.from('wrong_words').upsert(wrongRows, { onConflict:'user_id,word', ignoreDuplicates:false }),
+        20000
+      );
+      if(r2.error) console.error("wrong 上传错误",r2.error);
+    }
+    // 3) study_sessions（按日期）
+    var today = new Date().toISOString().slice(0,10);
+    var todayStats = { user_id:uid, date:today,
+      correct_count:(g.totalCorrect||0), wrong_count:(g.totalWrong||0),
+      words_practiced:((g.totalCorrect||0)+(g.totalWrong||0)),
+      mastered_words:JSON.stringify(g.masteredWords||{})
+    };
+    var r3 = await syncWithTimeout(
+      g.supa.from('study_sessions').upsert([todayStats], { onConflict:'user_id,date', ignoreDuplicates:false }),
+      15000
+    );
+    if(r3.error) console.error("sessions 上传错误",r3.error);
+
+    if(manual) toast("上传成功 ✅（进度"+progressRows.length+"条 / 错词"+wrongRows.length+"条）");
+    updateSyncStatus("已同步 "+new Date().toLocaleTimeString(),true);
+  }catch(e){
+    console.error("上传异常",e);
+    if(manual) toast("上传失败："+e.message);
+    updateSyncStatus("上传失败",false);
+  }finally{ g._syncing=false; }
+}
+
+// --- 下载（三表全部拉取 + 合并）---
+async function syncPull(manual){
+  if(g._syncing){ if(manual) toast("同步中，请稍后"); return; }
+  var uid = getUserId();
+  if(!uid){ if(manual) toast("请先登录"); return; }
+  if(!g.supa){ initSupa(); }
+  if(!g.supa){ if(manual) toast("未连接"); return; }
+  g._syncing = true;
+  updateSyncStatus("下载中...",null);
+  try{
+    var merged = false;
+    // 1) vocab_progress
+    var r1 = await syncWithTimeout(
+      g.supa.from('vocab_progress').select('*').eq('user_id',uid),
+      20000
+    );
+    if(r1.data && r1.data.length>0){
+      var touchedDates = {};
+      r1.data.forEach(function(r){
+        // 解析 word 列：新版形如 "课本|单元|日期"，旧版形如 "课本|单元"
+        var wParts = String(r.word||"").split("|");
+        var dateKey = "";
+        if(wParts.length>=3 && isStatsDateKey(wParts[wParts.length-1])){
+          dateKey = wParts.pop();
+        } else {
+          dateKey = String(r.last_practiced||"").slice(0,10);
+        }
+        if(!isStatsDateKey(dateKey)) dateKey = new Date().toISOString().slice(0,10);
+        var uk = wParts.join("|") || statsKey(String(r.book||g.book), String(r.unit||""));
+        var bucket = getStatsBucket(dateKey);
+        bucket.byUnit[uk] = bucket.byUnit[uk] || {c:0,w:0};
+        // 取最大值合并：上传的是累计值，重复拉取不会叠加，且双方数据都不丢失
+        if((r.correct_count||0) > bucket.byUnit[uk].c) bucket.byUnit[uk].c = (r.correct_count||0);
+        if((r.wrong_count||0) > bucket.byUnit[uk].w) bucket.byUnit[uk].w = (r.wrong_count||0);
+        touchedDates[dateKey] = true;
+      });
+      // 合并后按 byUnit 重新汇总被触碰日期桶的总量，保持 c/w = Σ byUnit
+      Object.keys(touchedDates).forEach(function(k){
+        var st = g.stats[k]; if(!st) return;
+        var sc=0, sw=0, has=false;
+        Object.keys(st.byUnit||{}).forEach(function(uk){ has=true; sc += (st.byUnit[uk].c||0); sw += (st.byUnit[uk].w||0); });
+        if(has){ st.c = sc; st.w = sw; }
+      });
+      merged = true;
+    }
+    // 2) wrong_words
+    var r2 = await syncWithTimeout(
+      g.supa.from('wrong_words').select('*').eq('user_id',uid),
+      20000
+    );
+    if(r2.data && r2.data.length>0){
+      r2.data.forEach(function(r){
+        if(!g.wrongBook[r.word]){ g.wrongBook[r.word]={count:0,fixed:false,updated:Date.now(),lastInput:"",meaning:"",phonetic:"",pos:""}; }
+        if(r.wrong_count>g.wrongBook[r.word].count){ g.wrongBook[r.word].count=r.wrong_count; g.wrongBook[r.word].fixed=!!r.fixed; g.wrongBook[r.word].updated=Date.now(); if(r.last_input) g.wrongBook[r.word].lastInput=r.last_input; if(r.meaning) g.wrongBook[r.word].meaning=r.meaning; if(r.phonetic) g.wrongBook[r.word].phonetic=r.phonetic; if(r.pos) g.wrongBook[r.word].pos=r.pos; merged=true; }
+      });
+    }
+    // 3) study_sessions（用于统计图表）
+    var r3 = await syncWithTimeout(
+      g.supa.from('study_sessions').select('*').eq('user_id',uid).order('date',{ascending:false}).limit(90),
+      15000
+    );
+    if(r3.data && r3.data.length>0){
+      // 把云端的累计值合并到今日统计
+      var latest = r3.data[0];
+      if(latest.correct_count>g.totalCorrect){ g.totalCorrect=latest.correct_count; merged=true; }
+      if(latest.wrong_count>g.totalWrong){ g.totalWrong=latest.wrong_count; merged=true; }
+      // 恢复 masteredWords（取最新一条记录中的 JSON）
+      if(latest.mastered_words){
+        try{
+          var mw = JSON.parse(latest.mastered_words);
+          if(mw && typeof mw === "object"){
+            // 合并：本地优先，云端补充
+            Object.keys(mw).forEach(function(k){
+              if(!g.masteredWords[k]) g.masteredWords[k] = mw[k];
+              else {
+                // 合并单词数组，去重
+                var localSet = new Set(g.masteredWords[k]);
+                mw[k].forEach(function(w){ localSet.add(w); });
+                g.masteredWords[k] = Array.from(localSet);
+              }
+            });
+            merged = true;
+          }
+        }catch(e){ console.warn("解析 mastered_words 失败",e); }
+      }
+    }
+    if(merged){
+      saveState(); renderStats(); renderChart(); renderWrong();
+      if(manual) toast("已同步云端数据 ✅");
+    } else { if(manual) toast("本地已是最新"); }
+    updateSyncStatus("已同步 "+new Date().toLocaleTimeString(),true);
+  }catch(e){
+    console.error("下载异常",e);
+    if(manual) toast("下载失败："+e.message);
+    updateSyncStatus("下载失败",false);
+  }finally{ g._syncing=false; }
+}
+
+// --- 配置保存 / 连接测试 ---
+function saveSupaConfig(){
+  g.supaUrl = document.getElementById("supaUrl").value.trim();
+  g.supaKey = document.getElementById("supaKey").value.trim();
+  // 去掉 URL 末尾多余的斜杠
+  if(g.supaUrl.endsWith("/")) g.supaUrl = g.supaUrl.slice(0,-1);
+  try{ localStorage.setItem("supaUrl", g.supaUrl); localStorage.setItem("supaKey", g.supaKey); }catch(e){}
+  g.supa = null; // 强制下次重新初始化
+  initSupa();
+  renderAuthUI();
+  toast("配置已保存");
+}
+
+async function testSupa(){
+  if(!g.supaUrl||!g.supaKey){ toast("请先填URL和Key"); return; }
+  initSupa();
+  if(!g.supa){ toast("初始化失败"); return; }
+  try{
+    var r = await syncWithTimeout(g.supa.from('vocab_progress').select('count',{count:'exact',head:true}), 10000);
+    if(r.error){ if(r.error.code==='42P01') toast("表不存在，请执行建表SQL"); else toast("连接失败："+r.error.message); }
+    else { toast("连接成功 ✅"); updateSyncStatus("已连接",true); }
+  }catch(e){ toast("连接失败："+e.message); }
+}
+
+var _dp;
+function debouncePush(){ clearTimeout(_dp); _dp = setTimeout(function(){ var uid=getUserId(); if(uid) syncPush(false); }, 5000); }
+
+// 页面加载后尝试自动恢复登录 + 自动拉取
+setTimeout(function(){
+  tryRestoreSession().then(function(ok){
+    if(ok){ syncPull(false); }
+  });
+}, 1500);
 
 
 
@@ -10535,16 +10883,16 @@ let __autoTimer = null;
 let __syncing = false;
 
 const $ = id => document.getElementById(id);
-function setDot(state,text){
-  const dot=$('syncDot'), st=$('syncStatus');
-  if(dot) dot.className='sync-status-dot '+state;
-  if(st) st.lastChild.textContent=' '+text;
-}
 function toast(msg){
   const t = document.createElement('div');
   t.className='toast'; t.innerText=msg;
   document.body.appendChild(t);
   setTimeout(()=>t.remove(),2200);
+}
+function setDot(state,text){
+  const dot=$('syncDot'), st=$('syncStatus');
+  if(dot) dot.className='sync-status-dot '+state;
+  if(st) st.lastChild.textContent=' '+text;
 }
 
 /* ========= Supabase 初始化 ========= */
@@ -10564,7 +10912,7 @@ function renderAuthUI(){
       <span style="font-size:12px;color:#10b981;font-weight:600">✅ ${currentUser.email}</span>
       <button class="btn btn-red" id="btnLogout" style="padding:4px 10px;font-size:12px">登出</button>
       <span id="autoTag" style="font-size:11px;color:#3b82f6">🔄 自动同步中</span>`;
-    $('btnLogout').onclick = async ()=>{ await sb.auth.signOut(); location.reload(); };
+    $('btnLogout').onclick = async ()=>{ await sb.auth.signOut(); localStorage.removeItem('supa_session'); location.reload(); };
   } else {
     box.innerHTML = `
       <input id="authEmail" placeholder="邮箱" style="width:140px;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">
@@ -10583,6 +10931,10 @@ async function doLogin(){
   if(!email||!pwd) return alert('请输入邮箱和密码');
   const {data,error}=await sb.auth.signInWithPassword({email,password:pwd});
   if(error) return alert('登录失败:'+error.message);
+  // 持久化 session 到 localStorage，防止刷新后丢失
+  if(data.session){
+    localStorage.setItem('supa_session', JSON.stringify(data.session));
+  }
   currentUser=data.user; renderAuthUI(); setDot('online','已登录');
   toast('✅ 登录成功，正在拉取最新数据…');
   await pullFromCloud(true);
@@ -10594,7 +10946,7 @@ async function doSignup(){
   if(pwd.length<6) return alert('密码至少6位');
   const {data,error}=await sb.auth.signUp({email,password:pwd});
   if(error) return alert('注册失败:'+error.message);
-  if(data.session){ currentUser=data.session.user; renderAuthUI(); setDot('online','已登录');
+  if(data.session){ currentUser=data.session.user; localStorage.setItem('supa_session',JSON.stringify(data.session)); renderAuthUI(); setDot('online','已登录');
     toast('注册成功，已自动登录'); await pullFromCloud(true);
   } else alert('注册成功，但后台仍要求邮件验证，请去 Authentication→Settings 关闭 Email confirmations');
 }
@@ -10638,28 +10990,22 @@ function rebind(id,fn){const b=$(id);if(!b)return;const c=b.cloneNode(true);b.pa
 rebind('btnTest', async ()=>{
   const url=($('supaUrl').value||'').trim(), key=($('supaKey').value||'').trim();
   if(!url||!key) return alert('先填 URL 和 Key');
-  // 保存配置后再测试
-  localStorage.setItem('supaUrl',url); localStorage.setItem('supaKey',key);
-  if(!initSB()) return alert('初始化失败');
-  try{
-    const {data,error}=await sb.auth.getSession();
-    if(error) return alert('连接失败:'+error.message);
-    if(data.session){currentUser=data.session.user;renderAuthUI();setDot('online','已登录');}
-    toast('✅ 连接正常 · '+(data.session?'已自动登录':'请登录'));
-  }catch(e){ alert('连接异常:'+e.message); }
+  sb=supabase.createClient(url,key);
+  const {data,error}=await sb.auth.getSession();
+  localStorage.setItem('supaUrl',url);localStorage.setItem('supaKey',key);
+  if(error) return alert('连接失败:'+error.message);
+  if(data.session){currentUser=data.session.user;localStorage.setItem('supa_session',JSON.stringify(data.session));renderAuthUI();setDot('online','已登录');}
+  toast('✅ 连接正常 · '+(data.session?'已自动登录':'请登录'));
 });
 rebind('btnPush', ()=>pushToCloud(false));
 rebind('btnPull', ()=>pullFromCloud(true));
 rebind('btnSave', async ()=>{
-  const url=($('supaUrl').value||'').trim(), key=($('supaKey').value||'').trim();
-  if(!url||!key) return alert('请填写 URL 和 Key');
-  localStorage.setItem('supaUrl',url); localStorage.setItem('supaKey',key);
-  if(!initSB()) return alert('初始化失败');
-  try{
-    const {data}=await sb.auth.getSession();
-    if(data.session){currentUser=data.session.user;renderAuthUI();setDot('online','已登录');}
-    toast('💾 配置已保存');
-  }catch(e){ toast('保存后请重试'); }
+  localStorage.setItem('supaUrl',$('supaUrl').value);
+  localStorage.setItem('supaKey',$('supaKey').value);
+  sb=supabase.createClient($('supaUrl').value.trim(),$('supaKey').value.trim());
+  const {data}=await sb.auth.getSession();
+  if(data.session){currentUser=data.session.user;localStorage.setItem('supa_session',JSON.stringify(data.session));renderAuthUI();setDot('online','已登录');}
+  toast('💾 配置已保存');
 });
 
 /* ========= 自动同步核心 ========= */
@@ -10683,21 +11029,36 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   if(localStorage.getItem('supaKey')&&$('supaKey')) $('supaKey').value=localStorage.getItem('supaKey');
 
   if(initSB()){
-    try{
-      const {data}=await sb.auth.getSession();
+    // 优先从 localStorage 恢复已保存的 session（解决刷新后丢失登录态的问题）
+    var savedSession = null;
+    try { savedSession = JSON.parse(localStorage.getItem('supa_session')||'null'); } catch(e){}
+    if(savedSession && savedSession.access_token){
+      const {data,error} = await sb.auth.setSession({
+        access_token: savedSession.access_token,
+        refresh_token: savedSession.refresh_token
+      });
+      if(!error && data.session){
+        currentUser = data.session.user;
+        localStorage.setItem('supa_session', JSON.stringify(data.session));
+        setDot('online','已登录(自动恢复)');
+      } else {
+        localStorage.removeItem('supa_session');
+        const {data:d2} = await sb.auth.getSession();
+        if(d2.session){ currentUser=d2.session.user; setDot('online','已登录'); }
+        else setDot('offline','未登录');
+      }
+    } else {
+      const {data} = await sb.auth.getSession();
       if(data.session){ currentUser=data.session.user; setDot('online','已登录'); }
       else setDot('offline','未登录');
-    }catch(e){ setDot('offline','未连接'); }
-  } else {
-    setDot('offline','未连接');
-  }
+    }
+  } else setDot('offline','未连接');
 
   renderAuthUI();
 
-  // 无论是否登录，按钮现在都可点；登录后自动拉取
   if(currentUser){
     startAutoSync();
-    try{ await pullFromCloud(false); }catch(e){}
+    await pullFromCloud(false);
   }
 });
 
