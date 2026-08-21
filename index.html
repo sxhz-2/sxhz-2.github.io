@@ -9261,7 +9261,7 @@ var g = {
   wrongBook: {}, stats: {}, rangeMode: "day",
   // masteredWords: { "book|unit": ["word1","word2",...] } 记录已掌握的单词，下次听写自动跳过
   masteredWords: {},
-  supaUrl: localStorage.getItem("supaUrl")||"", supaKey: localStorage.getItem("supaKey")||"", supa: null,
+  supaUrl: localStorage.getItem("supa_url")||"", supaKey: localStorage.getItem("supa_key")||"", supa: null,
   _t: null, _abort: false, _seq: 0, _syncing: false
 };
 // stats 结构: stats[date] = { c:总数, w:总数, byUnit: { "book|unit": {c,w} } }
@@ -10425,7 +10425,7 @@ function saveSupaConfig(){
   g.supaKey = document.getElementById("supaKey").value.trim();
   // 去掉 URL 末尾多余的斜杠
   if(g.supaUrl.endsWith("/")) g.supaUrl = g.supaUrl.slice(0,-1);
-  try{ localStorage.setItem("supaUrl", g.supaUrl); localStorage.setItem("supaKey", g.supaKey); }catch(e){}
+  try{ localStorage.setItem("supa_url", g.supaUrl); localStorage.setItem("supa_key", g.supaKey); }catch(e){}
   g.supa = null; // 强制下次重新初始化
   initSupa();
   renderAuthUI();
@@ -10894,6 +10894,13 @@ function setDot(state,text){
   if(dot) dot.className='sync-status-dot '+state;
   if(st) st.lastChild.textContent=' '+text;
 }
+// 持久化 currentUser，避免 reload 后登录态丢失导致反复横跳
+function saveCurrentUser(user){
+  try{ localStorage.setItem('supa_current_user', JSON.stringify(user||null)); }catch(e){}
+}
+function loadCurrentUser(){
+  try{ return JSON.parse(localStorage.getItem('supa_current_user')||'null'); }catch(e){ return null; }
+}
 
 /* ========= Supabase 初始化 ========= */
 function initSB(){
@@ -10912,7 +10919,7 @@ function renderAuthUI(){
       <span style="font-size:12px;color:#10b981;font-weight:600">✅ ${currentUser.email}</span>
       <button class="btn btn-red" id="btnLogout" style="padding:4px 10px;font-size:12px">登出</button>
       <span id="autoTag" style="font-size:11px;color:#3b82f6">🔄 自动同步中</span>`;
-    $('btnLogout').onclick = async ()=>{ await sb.auth.signOut(); localStorage.removeItem('supa_session'); location.reload(); };
+    $('btnLogout').onclick = async ()=>{ await sb.auth.signOut(); saveCurrentUser(null); location.reload(); };
   } else {
     box.innerHTML = `
       <input id="authEmail" placeholder="邮箱" style="width:140px;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px">
@@ -10931,13 +10938,9 @@ async function doLogin(){
   if(!email||!pwd) return alert('请输入邮箱和密码');
   const {data,error}=await sb.auth.signInWithPassword({email,password:pwd});
   if(error) return alert('登录失败:'+error.message);
-  // 持久化 session 到 localStorage，防止刷新后丢失
-  if(data.session){
-    localStorage.setItem('supa_session', JSON.stringify(data.session));
-  }
-  currentUser=data.user; renderAuthUI(); setDot('online','已登录');
+  currentUser=data.user; saveCurrentUser(currentUser); renderAuthUI(); setDot('online','已登录');
   toast('✅ 登录成功，正在拉取最新数据…');
-  await pullFromCloud(true);
+  await pullFromCloud(false);
 }
 async function doSignup(){
   initSB(); if(!sb) return alert('先填 URL / Key 并保存');
@@ -10946,8 +10949,8 @@ async function doSignup(){
   if(pwd.length<6) return alert('密码至少6位');
   const {data,error}=await sb.auth.signUp({email,password:pwd});
   if(error) return alert('注册失败:'+error.message);
-  if(data.session){ currentUser=data.session.user; localStorage.setItem('supa_session',JSON.stringify(data.session)); renderAuthUI(); setDot('online','已登录');
-    toast('注册成功，已自动登录'); await pullFromCloud(true);
+  if(data.session){ currentUser=data.session.user; saveCurrentUser(currentUser); renderAuthUI(); setDot('online','已登录');
+    toast('注册成功，已自动登录'); await pullFromCloud(false);
   } else alert('注册成功，但后台仍要求邮件验证，请去 Authentication→Settings 关闭 Email confirmations');
 }
 
@@ -10982,7 +10985,20 @@ async function pullFromCloud(reloadAfter){
   for(let k in snap) localStorage.setItem(k, typeof snap[k]==='string'?snap[k]:JSON.stringify(snap[k]));
   setDot('online','已同步');
   toast('⬇️ 云端数据已同步到本地');
-  if(reloadAfter) setTimeout(()=>location.reload(),900);
+  // 登录后只需刷新内存中的状态，不再 reload 整页，避免登录态丢失导致反复横跳
+  if(reloadAfter){
+    try{
+      var savedState = JSON.parse(localStorage.getItem('vocab_state')||'{}');
+      if(savedState.wrongBook) g.wrongBook = savedState.wrongBook;
+      if(savedState.stats) g.stats = savedState.stats;
+      if(typeof savedState.correct==='number') g.correct = savedState.correct;
+      if(typeof savedState.wrong==='number') g.wrong = savedState.wrong;
+      if(typeof savedState.totalCorrect==='number') g.totalCorrect = savedState.totalCorrect;
+      if(typeof savedState.totalWrong==='number') g.totalWrong = savedState.totalWrong;
+      if(savedState.masteredWords && typeof savedState.masteredWords==='object') g.masteredWords = savedState.masteredWords;
+      renderStats(); renderChart(); renderWrong();
+    }catch(e){ console.warn('刷新内存状态失败',e); }
+  }
 }
 
 /* ========= 接管原按钮 ========= */
@@ -10994,8 +11010,12 @@ rebind('btnTest', async ()=>{
   const {data,error}=await sb.auth.getSession();
   localStorage.setItem('supaUrl',url);localStorage.setItem('supaKey',key);
   if(error) return alert('连接失败:'+error.message);
-  if(data.session){currentUser=data.session.user;localStorage.setItem('supa_session',JSON.stringify(data.session));renderAuthUI();setDot('online','已登录');}
-  toast('✅ 连接正常 · '+(data.session?'已自动登录':'请登录'));
+  if(data.session){currentUser=data.session.user;saveCurrentUser(currentUser);renderAuthUI();setDot('online','已登录');}
+  else {
+    const saved = loadCurrentUser();
+    if(saved && saved.id){ currentUser=saved; setDot('online','已登录(本地恢复)'); renderAuthUI(); }
+  }
+  toast('✅ 连接正常 · '+(currentUser?'已自动登录':'请登录'));
 });
 rebind('btnPush', ()=>pushToCloud(false));
 rebind('btnPull', ()=>pullFromCloud(true));
@@ -11004,7 +11024,7 @@ rebind('btnSave', async ()=>{
   localStorage.setItem('supaKey',$('supaKey').value);
   sb=supabase.createClient($('supaUrl').value.trim(),$('supaKey').value.trim());
   const {data}=await sb.auth.getSession();
-  if(data.session){currentUser=data.session.user;localStorage.setItem('supa_session',JSON.stringify(data.session));renderAuthUI();setDot('online','已登录');}
+  if(data.session){currentUser=data.session.user;saveCurrentUser(currentUser);renderAuthUI();setDot('online','已登录');}
   toast('💾 配置已保存');
 });
 
@@ -11029,27 +11049,12 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   if(localStorage.getItem('supaKey')&&$('supaKey')) $('supaKey').value=localStorage.getItem('supaKey');
 
   if(initSB()){
-    // 优先从 localStorage 恢复已保存的 session（解决刷新后丢失登录态的问题）
-    var savedSession = null;
-    try { savedSession = JSON.parse(localStorage.getItem('supa_session')||'null'); } catch(e){}
-    if(savedSession && savedSession.access_token){
-      const {data,error} = await sb.auth.setSession({
-        access_token: savedSession.access_token,
-        refresh_token: savedSession.refresh_token
-      });
-      if(!error && data.session){
-        currentUser = data.session.user;
-        localStorage.setItem('supa_session', JSON.stringify(data.session));
-        setDot('online','已登录(自动恢复)');
-      } else {
-        localStorage.removeItem('supa_session');
-        const {data:d2} = await sb.auth.getSession();
-        if(d2.session){ currentUser=d2.session.user; setDot('online','已登录'); }
-        else setDot('offline','未登录');
-      }
-    } else {
-      const {data} = await sb.auth.getSession();
-      if(data.session){ currentUser=data.session.user; setDot('online','已登录'); }
+    const {data}=await sb.auth.getSession();
+    if(data.session){ currentUser=data.session.user; setDot('online','已登录'); }
+    else {
+      // getSession 失败时，尝试从 localStorage 兜底恢复，避免已登录用户被踢回登录页
+      const saved = loadCurrentUser();
+      if(saved && saved.id){ currentUser = saved; setDot('online','已登录(本地恢复)'); }
       else setDot('offline','未登录');
     }
   } else setDot('offline','未连接');
