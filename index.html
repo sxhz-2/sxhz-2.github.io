@@ -9341,22 +9341,6 @@ function init(){
     if(saved.unit) g.unit = saved.unit;
     // 恢复已掌握单词记录
     if(saved.masteredWords && typeof saved.masteredWords === "object") g.masteredWords = saved.masteredWords;
-    // 修复4 兼容迁移：为存量错词兜底补填 created（首次加入时间），
-    // 使"月错误量"按新增时间统计在旧数据上也能立即生效（无 created 时回退 updated）。
-    var _migrated = false;
-    Object.keys(g.wrongBook).forEach(function(k){
-      var w = g.wrongBook[k];
-      if(!w || typeof w !== "object") return;
-      if(typeof w.created !== "number" || w.created <= 0){
-        w.created = (typeof w.updated==="number" && w.updated>0) ? w.updated : Date.now();
-        _migrated = true;
-      }
-    });
-    if(_migrated) try{ localStorage.setItem("vocab_state", JSON.stringify({
-      book:g.book,unit:g.unit,idx:g.idx,correct:g.correct,wrong:g.wrong,
-      totalCorrect:g.totalCorrect,totalWrong:g.totalWrong,wrongBook:g.wrongBook,
-      stats:g.stats,masteredWords:g.masteredWords,mode:g.mode,version:2
-    })); }catch(e){}
   }catch(e){}
 
   // ---- 课本下拉：硬编码全部9个 ----
@@ -9699,19 +9683,17 @@ function checkAnswer(ans){
     if(!cur.fake) addWrong(cur.word, cur.book, cur.unit, cur.pos, cur.meaning, cur.phonetic, a);
   }
   g.totalCorrect += (isCorrect?1:0);
-  // 修复：跳过（a 为空）与答错一律计入 totalWrong / 当日 bucket.w / 按单元统计，
-  // 保证"今日总量""总正确率""月听写量"等指标与实际答题量一致。
-  g.totalWrong += (isCorrect?0:1);
+  g.totalWrong += (a&&!isCorrect?1:0);
   var today = new Date().toISOString().slice(0,10);
   var bucket = getStatsBucket(today);
   if(isCorrect) bucket.c++;
-  else bucket.w++;
+  else if(a) bucket.w++;
   var curBook = cur.book || g.book;
   var curUnit = cur.unit || (g.unit==="__all"?"all":g.unit);
   var uKey = statsKey(curBook, curUnit);
   bucket.byUnit[uKey] = bucket.byUnit[uKey] || {c:0,w:0};
   if(isCorrect) bucket.byUnit[uKey].c++;
-  else bucket.byUnit[uKey].w++;
+  else if(a) bucket.byUnit[uKey].w++;
   g.idx++;
   saveState(); renderStats(); renderChart(); renderWrong();
   if(g.supaUrl && g.supaKey) debouncePush();
@@ -9738,7 +9720,7 @@ function endQuiz(){
 // ===== 错词管理 =====
 function addWrong(word,book,unit,pos,meaning,phonetic,userInput){
   var now = Date.now();
-  if(!g.wrongBook[word]){ g.wrongBook[word] = {count:0,fixed:false,book:book||"",unit:unit||"",pos:pos||"",meaning:meaning||"",phonetic:phonetic||"",updated:now,created:now,lastInput:""}; }
+  if(!g.wrongBook[word]){ g.wrongBook[word] = {count:0,fixed:false,book:book||"",unit:unit||"",pos:pos||"",meaning:meaning||"",phonetic:phonetic||"",updated:now,lastInput:""}; }
   g.wrongBook[word].count++; g.wrongBook[word].fixed = false; g.wrongBook[word].updated = now;
   // 始终更新 lastInput（即使是空字符串也记录为"跳过"）
   g.wrongBook[word].lastInput = (userInput||"");
@@ -9763,17 +9745,11 @@ function renderStats(){
   // 计算已掌握数量（当前范围）
   var done = getMasteredSet();
   var masteredCount = done.size;
-  // 修复：默认按"总数-已掌握"计算剩余；仅当测验进行中（g.remain 非空）才叠加 g.idx，
-  // 避免测验结束后 g.idx 未重置导致已掌握词被重复扣减、sRemain 虚低。
-  var remain;
-  if(g.remain && g.remain.length){ remain = Math.max(0, total - masteredCount - g.idx); }
-  else { remain = Math.max(0, total - masteredCount); }
+  var remain = Math.max(0, total - masteredCount - g.idx);
   document.getElementById("sRemain").textContent = remain;
   document.getElementById("sCorrect").textContent = g.correct;
   document.getElementById("sWrong").textContent = g.wrong;
-  // 修复：sTotal 显示"本组实际词数"——上限为当前未掌握词数，避免未开始测验时显示词量设置值(如20)而实际不足。
-  var actualRemain = Math.max(0, total - masteredCount);
-  document.getElementById("sTotal").textContent = (g.remain && g.remain.length) ? g.remain.length : Math.min(g.n || 0, actualRemain);
+  document.getElementById("sTotal").textContent = g.remain.length || g.n || 0;
   var today = new Date().toISOString().slice(0,10);
   // 今日统计也按当前范围筛选
   var td = {c:0,w:0};
@@ -9878,16 +9854,14 @@ function updatePeriodFix(){
   document.getElementById("pUnfix").textContent = err - fx;
   document.getElementById("pTodayFix").textContent = todayFix;
   document.getElementById("pFixRate").textContent = err ? Math.round(100*fx/err)+"%" : "0%";
-  // 月错误量：统计本月新增的错词。修复：改用 created（首次加入错词本的时间）判断，
-  // 避免本月修正的上月旧词因 updated 更新而被误算为"本月新增"。
+  // 月错误量：统计本月新增的错词（updated 在本月内的未改正错词）
   var now2 = new Date();
   var mStart = new Date(now2.getFullYear(), now2.getMonth(), 1).getTime();
   var mEnd = new Date(now2.getFullYear(), now2.getMonth()+1, 1).getTime()-1;
   var monthErrCount = 0;
   wc.forEach(function(x){
-    // 兼容旧数据（无 created 时回退到 updated），保证存量数据月度统计立即可用
-    var created = (typeof x.created==="number" && x.created>0) ? x.created : (x.updated||0);
-    if(created >= mStart && created <= mEnd && !x.fixed) monthErrCount++;
+    var up = x.updated||0;
+    if(up >= mStart && up <= mEnd && !x.fixed) monthErrCount++;
   });
   var elPME = document.getElementById("pMonthError");
   if(elPME){ elPME.textContent = monthErrCount; }
@@ -9901,19 +9875,7 @@ function renderChart(){
   if(mode==="day"){
     for(var i=6;i>=0;i--){ var d=new Date(now); d.setDate(d.getDate()-i); labels.push((d.getMonth()+1)+"/"+d.getDate()); buckets.push(d.toISOString().slice(0,10)); }
   } else if(mode==="week"){
-    // 修复：按自然周（周一为每周起点）分 4 个桶，标签显示起止日期范围，避免 4 个桶都标 "W1" 无法区分。
-    var oneDay = 86400000;
-    for(var i=3;i>=0;i--){
-      var wkEnd = new Date(now); wkEnd.setHours(0,0,0,0);
-      wkEnd.setTime(wkEnd.getTime() - i*7*oneDay);
-      // 该周周一
-      var dayOfWeek = (wkEnd.getDay()+6)%7; // 0=周一..6=周日
-      var wkStart = new Date(wkEnd); wkStart.setTime(wkEnd.getTime() - dayOfWeek*oneDay);
-      var wkEndDate = new Date(wkStart); wkEndDate.setTime(wkStart.getTime() + 6*oneDay);
-      var lbl = (wkStart.getMonth()+1)+"/"+wkStart.getDate()+"-"+(wkEndDate.getMonth()+1)+"/"+wkEndDate.getDate();
-      labels.push(lbl);
-      buckets.push(wkStart.toISOString().slice(0,10));
-    }
+    for(var i=3;i>=0;i--){ var d=new Date(now); d.setDate(d.getDate()-i*7); labels.push("W"+Math.ceil((d.getDate())/7)); buckets.push(d.toISOString().slice(0,10)); }
   } else {
     for(var i=5;i>=0;i--){ var d=new Date(now); d.setMonth(d.getMonth()-i); labels.push((d.getMonth()+1)+"月"); buckets.push(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")); }
   }
@@ -10153,6 +10115,78 @@ function syncWithTimeout(promise, ms){
   return Promise.race([promise, timeoutP]);
 }
 
+// ===== Supabase 一键建表 SQL（供用户在 Supabase SQL Editor 执行）=====
+var SUPABASE_SETUP_SQL =
+"-- 1) 建表（若不存在）\n"+
+"CREATE TABLE IF NOT EXISTS public.user_snapshot (\n"+
+"  id BIGSERIAL PRIMARY KEY, user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,\n"+
+"  created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(), snapshot_data JSONB\n"+
+");\n"+
+"CREATE TABLE IF NOT EXISTS public.vocab_progress (\n"+
+"  id BIGSERIAL PRIMARY KEY, user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,\n"+
+"  book TEXT DEFAULT '', unit TEXT DEFAULT '', word TEXT NOT NULL,\n"+
+"  correct_count INT DEFAULT 0, wrong_count INT DEFAULT 0, last_practiced TIMESTAMPTZ DEFAULT NOW()\n"+
+");\n"+
+"CREATE TABLE IF NOT EXISTS public.wrong_words (\n"+
+"  id BIGSERIAL PRIMARY KEY, user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,\n"+
+"  word TEXT NOT NULL, meaning TEXT DEFAULT '', phonetic TEXT DEFAULT '', pos TEXT DEFAULT '',\n"+
+"  last_input TEXT DEFAULT '', wrong_count INT DEFAULT 1, fixed BOOLEAN DEFAULT FALSE\n"+
+");\n"+
+"CREATE TABLE IF NOT EXISTS public.study_sessions (\n"+
+"  id BIGSERIAL PRIMARY KEY, user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,\n"+
+"  date DATE DEFAULT CURRENT_DATE, correct_count INT DEFAULT 0, wrong_count INT DEFAULT 0,\n"+
+"  words_practiced INT DEFAULT 0, mastered_words TEXT\n"+
+");\n"+
+"-- 2) 开启行级安全策略（RLS）\n"+
+"ALTER TABLE public.user_snapshot ENABLE ROW LEVEL SECURITY;\n"+
+"ALTER TABLE public.vocab_progress ENABLE ROW LEVEL SECURITY;\n"+
+"ALTER TABLE public.wrong_words ENABLE ROW LEVEL SECURITY;\n"+
+"ALTER TABLE public.study_sessions ENABLE ROW LEVEL SECURITY;\n"+
+"-- 3) 每张表允许相应用户读写自己的数据\n"+
+"CREATE POLICY IF NOT EXISTS \"u_snap_self\" ON public.user_snapshot FOR ALL USING (auth.uid()=user_id) WITH CHECK (auth.uid()=user_id);\n"+
+"CREATE POLICY IF NOT EXISTS \"u_prog_self\" ON public.vocab_progress FOR ALL USING (auth.uid()=user_id) WITH CHECK (auth.uid()=user_id);\n"+
+"CREATE POLICY IF NOT EXISTS \"u_wrong_self\" ON public.wrong_words FOR ALL USING (auth.uid()=user_id) WITH CHECK (auth.uid()=user_id);\n"+
+"CREATE POLICY IF NOT EXISTS \"u_sess_self\" ON public.study_sessions FOR ALL USING (auth.uid()=user_id) WITH CHECK (auth.uid()=user_id);\n"+
+"-- 4) anon/authenticated 角色授权（确保 anon key 可经 RLS 读写）\n"+
+"GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO anon,authenticated;\n"+
+"GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO anon,authenticated;\n";
+
+// 弹出"需要初始化数据库"的引导框：含一键复制 SQL + 操作指引
+function showSetupGuide(errMsg){
+  try{
+    var overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999;display:flex;align-items:center;justify-content:center;padding:16px";
+    var box = document.createElement("div");
+    box.style.cssText = "background:#fff;color:#222;max-width:560px;width:100%;border-radius:12px;padding:18px;box-shadow:0 8px 30px rgba(0,0,0,.25);font-size:14px;line-height:1.6";
+    box.innerHTML =
+      '<div style="font-size:17px;font-weight:700;color:#1e3a5f;margin-bottom:8px">☁️ 云端数据库未就绪</div>'+
+      '<div style="color:#444">上传/下载需要先在你的 Supabase 项目里建好数据表并开启行级安全策略（RLS）。'+
+      (errMsg ? '<div style="margin-top:6px;color:#b91c1c;font-size:12px">技术信息：'+String(errMsg).replace(/[<>&]/g,"")+'</div>' : '')+'</div>'+
+      '<div style="margin:10px 0 6px;font-weight:600;color:#334155">操作指引：</div>'+
+      '<ol style="margin:0 0 8px 18px;color:#334155">'+
+        '<li>打开 <a href="https://app.supabase.com" target="_blank" rel="noopener" style="color:#3b82f6">Supabase 控制台</a>，进入本项目。</li>'+
+        '<li>左侧菜单 → <b>SQL Editor</b> → <b>New query</b>。</li>'+
+        '<li>点击下方"复制 SQL 脚本"，粘贴到编辑器，点 <b>Run</b>。</li>'+
+        '<li>回到本页，再次点击"立即上传/下载"即可正常使用。</li>'+
+      '</ol>'+
+      '<textarea id="setupSQL" readonly style="width:100%;height:110px;font-size:11px;font-family:monospace;padding:6px;border:1px solid #d1d5db;border-radius:6px;background:#f8fafc;resize:vertical"></textarea>'+
+      '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">'+
+        '<button id="copySQL" style="padding:8px 14px;border:0;border-radius:6px;background:#3b82f6;color:#fff;cursor:pointer;font-size:14px">📋 复制 SQL 脚本</button>'+
+        '<span id="copyTip" style="font-size:12px;color:#10b981"></span>'+
+        '<span style="margin-left:auto;font-size:11px;color:#94a3b8">提示：执行 SQL 不会删除已有数据</span>'+
+      '</div>'+
+      '<div style="text-align:right;margin-top:12px"><button id="closeSetup" style="padding:8px 16px;border:0;border-radius:6px;background:#e2e8f0;color:#334155;cursor:pointer">我知道了</button></div>';
+    overlay.appendChild(box); document.body.appendChild(overlay);
+    document.getElementById("setupSQL").value = SUPABASE_SETUP_SQL;
+    document.getElementById("copySQL").onclick = function(){
+      var ta = document.getElementById("setupSQL"); ta.select(); ta.setSelectionRange(0,ta.value.length);
+      try { document.execCommand("copy"); document.getElementById("copyTip").textContent="已复制 ✅"; }
+      catch(e){ document.getElementById("copyTip").textContent="请手动复制"; }
+    };
+    document.getElementById("closeSetup").onclick = function(){ document.body.removeChild(overlay); };
+  }catch(e){ console.error(e); alert("云端数据库未就绪，请到 Supabase SQL Editor 执行建表脚本（见控制台）"); console.log(SUPABASE_SETUP_SQL); }
+}
+
 // ===== Supabase 同步（完整版：Auth 登录 + 三表同步）=====
 
 // --- 登录态管理 ---
@@ -10282,10 +10316,10 @@ function initSupa(){
 
 // --- 上传（三表全部推送）---
 async function syncPush(manual){
-  if(g._syncing){ if(manual) toast("同步中，请稍后"); return; }
-  if(!g.supaUrl||!g.supaKey){ if(manual) toast("请先填写并保存配置"); return; }
+  if(g._syncing){ if(manual){ toast("同步中，请稍后"); alert("同步正在进行中，请稍候再试。"); } return; }
+  if(!g.supaUrl||!g.supaKey){ alert("请先在下方填写 Supabase URL 和 Anon Key，并点击「保存配置」。"); return; }
   var uid = getUserId();
-  if(!uid){ if(manual) toast("请先登录"); return; }
+  if(!uid){ alert("请先在「账号登录」区用邮箱注册并登录（或登录已有账号），再执行上传。"); return; }
   initSupa();
   if(!g.supa){ if(manual) toast("初始化失败"); return; }
   g._syncing = true;
@@ -10354,7 +10388,12 @@ async function syncPush(manual){
     updateSyncStatus("已同步 "+new Date().toLocaleTimeString(),true);
   }catch(e){
     console.error("上传异常",e);
-    if(manual) toast("上传失败："+e.message);
+    var msg = String((e&&e.message)||e||"");
+    var code = (e&&e.code)||"";
+    // 识别需要初始化数据库的典型错误
+    var needSetup = /row-level security|RLS|violates row-level|42501|401|Unauthorized|406|Not Acceptable|42P01|relation .* does not exist|does not exist/i.test(msg+code);
+    if(needSetup){ showSetupGuide(msg); if(manual) toast("上传受阻：云端数据库未就绪"); }
+    else { if(manual) toast("上传失败："+msg); }
     updateSyncStatus("上传失败",false);
   }finally{ g._syncing=false; }
 }
@@ -11005,8 +11044,8 @@ async function pushToCloud(silent){
     try{snap[k]=JSON.parse(raw)}catch{snap[k]=raw}
   }
   const {error}=await sb.from('user_snapshot').upsert({
-    user_id:currentUser.id, data:snap, updated_at:new Date().toISOString()
-  });
+    user_id:currentUser.id, snapshot_data:snap, updated_at:new Date().toISOString()
+  },{onConflict:'user_id'});
   __syncing=false;
   if(!error && !silent){ toast('☁️ 已上传云端'); setDot('online','已同步'); }
   if(error && !silent){ alert('上传失败:'+error.message); setDot('offline','上传失败'); }
@@ -11016,10 +11055,10 @@ async function pullFromCloud(reloadAfter){
   if(!sb||!currentUser||__syncing) return;
   __syncing=true;
   setDot('syncing','拉取中…');
-  const {data,error}=await sb.from('user_snapshot').select('*').eq('user_id',currentUser.id).single();
+  const {data,error}=await sb.from('user_snapshot').select('user_id,snapshot_data,updated_at').eq('user_id',currentUser.id).single();
   __syncing=false;
   if(error||!data){ setDot('online','已登录'); return toast('云端暂无数据，先上传一次'); }
-  const snap=data.data||{};
+  const snap=(data.snapshot_data||data.data||{});
   for(let k in snap) localStorage.setItem(k, typeof snap[k]==='string'?snap[k]:JSON.stringify(snap[k]));
   setDot('online','已同步');
   toast('⬇️ 云端数据已同步到本地');
