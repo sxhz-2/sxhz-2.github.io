@@ -10348,7 +10348,7 @@ async function syncPush(manual){
     });
     if(progressRows.length>0){
       var r1 = await syncWithTimeout(
-        g.supa.from('vocab_progress').upsert(progressRows, { onConflict:'user_id,book,unit,word', ignoreDuplicates:false }),
+        g.supa.from('vocab_progress').upsert(progressRows, { onConflict:'user_id,word', ignoreDuplicates:false }),
         20000
       );
       if(r1.error) console.error("progress 上传错误",r1.error);
@@ -11043,9 +11043,15 @@ async function pushToCloud(silent){
     const raw=localStorage.getItem(k);
     try{snap[k]=JSON.parse(raw)}catch{snap[k]=raw}
   }
-  const {error}=await sb.from('user_snapshot').upsert({
-    user_id:currentUser.id, snapshot_data:snap, updated_at:new Date().toISOString()
-  },{onConflict:'user_id'});
+  // 先查后定：避免 "no unique or exclusion constraint matching ON CONFLICT" 报错
+  const exist = await sb.from('user_snapshot').select('id').eq('user_id',currentUser.id).maybeSingle();
+  let res;
+  if(exist && exist.data){
+    res = await sb.from('user_snapshot').update({ snapshot_data:snap, updated_at:new Date().toISOString() }).eq('user_id',currentUser.id);
+  }else{
+    res = await sb.from('user_snapshot').insert({ user_id:currentUser.id, snapshot_data:snap, updated_at:new Date().toISOString() });
+  }
+  const error = (res&&res.error)||(exist&&exist.error)||null;
   __syncing=false;
   if(!error && !silent){ toast('☁️ 已上传云端'); setDot('online','已同步'); }
   if(error && !silent){ alert('上传失败:'+error.message); setDot('offline','上传失败'); }
