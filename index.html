@@ -9341,6 +9341,22 @@ function init(){
     if(saved.unit) g.unit = saved.unit;
     // 恢复已掌握单词记录
     if(saved.masteredWords && typeof saved.masteredWords === "object") g.masteredWords = saved.masteredWords;
+    // 修复4 兼容迁移：为存量错词兜底补填 created（首次加入时间），
+    // 使"月错误量"按新增时间统计在旧数据上也能立即生效（无 created 时回退 updated）。
+    var _migrated = false;
+    Object.keys(g.wrongBook).forEach(function(k){
+      var w = g.wrongBook[k];
+      if(!w || typeof w !== "object") return;
+      if(typeof w.created !== "number" || w.created <= 0){
+        w.created = (typeof w.updated==="number" && w.updated>0) ? w.updated : Date.now();
+        _migrated = true;
+      }
+    });
+    if(_migrated) try{ localStorage.setItem("vocab_state", JSON.stringify({
+      book:g.book,unit:g.unit,idx:g.idx,correct:g.correct,wrong:g.wrong,
+      totalCorrect:g.totalCorrect,totalWrong:g.totalWrong,wrongBook:g.wrongBook,
+      stats:g.stats,masteredWords:g.masteredWords,mode:g.mode,version:2
+    })); }catch(e){}
   }catch(e){}
 
   // ---- 课本下拉：硬编码全部9个 ----
@@ -9683,17 +9699,19 @@ function checkAnswer(ans){
     if(!cur.fake) addWrong(cur.word, cur.book, cur.unit, cur.pos, cur.meaning, cur.phonetic, a);
   }
   g.totalCorrect += (isCorrect?1:0);
-  g.totalWrong += (a&&!isCorrect?1:0);
+  // 修复：跳过（a 为空）与答错一律计入 totalWrong / 当日 bucket.w / 按单元统计，
+  // 保证"今日总量""总正确率""月听写量"等指标与实际答题量一致。
+  g.totalWrong += (isCorrect?0:1);
   var today = new Date().toISOString().slice(0,10);
   var bucket = getStatsBucket(today);
   if(isCorrect) bucket.c++;
-  else if(a) bucket.w++;
+  else bucket.w++;
   var curBook = cur.book || g.book;
   var curUnit = cur.unit || (g.unit==="__all"?"all":g.unit);
   var uKey = statsKey(curBook, curUnit);
   bucket.byUnit[uKey] = bucket.byUnit[uKey] || {c:0,w:0};
   if(isCorrect) bucket.byUnit[uKey].c++;
-  else if(a) bucket.byUnit[uKey].w++;
+  else bucket.byUnit[uKey].w++;
   g.idx++;
   saveState(); renderStats(); renderChart(); renderWrong();
   if(g.supaUrl && g.supaKey) debouncePush();
@@ -9720,7 +9738,7 @@ function endQuiz(){
 // ===== 错词管理 =====
 function addWrong(word,book,unit,pos,meaning,phonetic,userInput){
   var now = Date.now();
-  if(!g.wrongBook[word]){ g.wrongBook[word] = {count:0,fixed:false,book:book||"",unit:unit||"",pos:pos||"",meaning:meaning||"",phonetic:phonetic||"",updated:now,lastInput:""}; }
+  if(!g.wrongBook[word]){ g.wrongBook[word] = {count:0,fixed:false,book:book||"",unit:unit||"",pos:pos||"",meaning:meaning||"",phonetic:phonetic||"",updated:now,created:now,lastInput:""}; }
   g.wrongBook[word].count++; g.wrongBook[word].fixed = false; g.wrongBook[word].updated = now;
   // 始终更新 lastInput（即使是空字符串也记录为"跳过"）
   g.wrongBook[word].lastInput = (userInput||"");
@@ -9745,11 +9763,17 @@ function renderStats(){
   // 计算已掌握数量（当前范围）
   var done = getMasteredSet();
   var masteredCount = done.size;
-  var remain = Math.max(0, total - masteredCount - g.idx);
+  // 修复：默认按"总数-已掌握"计算剩余；仅当测验进行中（g.remain 非空）才叠加 g.idx，
+  // 避免测验结束后 g.idx 未重置导致已掌握词被重复扣减、sRemain 虚低。
+  var remain;
+  if(g.remain && g.remain.length){ remain = Math.max(0, total - masteredCount - g.idx); }
+  else { remain = Math.max(0, total - masteredCount); }
   document.getElementById("sRemain").textContent = remain;
   document.getElementById("sCorrect").textContent = g.correct;
   document.getElementById("sWrong").textContent = g.wrong;
-  document.getElementById("sTotal").textContent = g.remain.length || g.n || 0;
+  // 修复：sTotal 显示"本组实际词数"——上限为当前未掌握词数，避免未开始测验时显示词量设置值(如20)而实际不足。
+  var actualRemain = Math.max(0, total - masteredCount);
+  document.getElementById("sTotal").textContent = (g.remain && g.remain.length) ? g.remain.length : Math.min(g.n || 0, actualRemain);
   var today = new Date().toISOString().slice(0,10);
   // 今日统计也按当前范围筛选
   var td = {c:0,w:0};
@@ -9854,14 +9878,16 @@ function updatePeriodFix(){
   document.getElementById("pUnfix").textContent = err - fx;
   document.getElementById("pTodayFix").textContent = todayFix;
   document.getElementById("pFixRate").textContent = err ? Math.round(100*fx/err)+"%" : "0%";
-  // 月错误量：统计本月新增的错词（updated 在本月内的未改正错词）
+  // 月错误量：统计本月新增的错词。修复：改用 created（首次加入错词本的时间）判断，
+  // 避免本月修正的上月旧词因 updated 更新而被误算为"本月新增"。
   var now2 = new Date();
   var mStart = new Date(now2.getFullYear(), now2.getMonth(), 1).getTime();
   var mEnd = new Date(now2.getFullYear(), now2.getMonth()+1, 1).getTime()-1;
   var monthErrCount = 0;
   wc.forEach(function(x){
-    var up = x.updated||0;
-    if(up >= mStart && up <= mEnd && !x.fixed) monthErrCount++;
+    // 兼容旧数据（无 created 时回退到 updated），保证存量数据月度统计立即可用
+    var created = (typeof x.created==="number" && x.created>0) ? x.created : (x.updated||0);
+    if(created >= mStart && created <= mEnd && !x.fixed) monthErrCount++;
   });
   var elPME = document.getElementById("pMonthError");
   if(elPME){ elPME.textContent = monthErrCount; }
@@ -9875,7 +9901,19 @@ function renderChart(){
   if(mode==="day"){
     for(var i=6;i>=0;i--){ var d=new Date(now); d.setDate(d.getDate()-i); labels.push((d.getMonth()+1)+"/"+d.getDate()); buckets.push(d.toISOString().slice(0,10)); }
   } else if(mode==="week"){
-    for(var i=3;i>=0;i--){ var d=new Date(now); d.setDate(d.getDate()-i*7); labels.push("W"+Math.ceil((d.getDate())/7)); buckets.push(d.toISOString().slice(0,10)); }
+    // 修复：按自然周（周一为每周起点）分 4 个桶，标签显示起止日期范围，避免 4 个桶都标 "W1" 无法区分。
+    var oneDay = 86400000;
+    for(var i=3;i>=0;i--){
+      var wkEnd = new Date(now); wkEnd.setHours(0,0,0,0);
+      wkEnd.setTime(wkEnd.getTime() - i*7*oneDay);
+      // 该周周一
+      var dayOfWeek = (wkEnd.getDay()+6)%7; // 0=周一..6=周日
+      var wkStart = new Date(wkEnd); wkStart.setTime(wkEnd.getTime() - dayOfWeek*oneDay);
+      var wkEndDate = new Date(wkStart); wkEndDate.setTime(wkStart.getTime() + 6*oneDay);
+      var lbl = (wkStart.getMonth()+1)+"/"+wkStart.getDate()+"-"+(wkEndDate.getMonth()+1)+"/"+wkEndDate.getDate();
+      labels.push(lbl);
+      buckets.push(wkStart.toISOString().slice(0,10));
+    }
   } else {
     for(var i=5;i>=0;i--){ var d=new Date(now); d.setMonth(d.getMonth()-i); labels.push((d.getMonth()+1)+"月"); buckets.push(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")); }
   }
