@@ -14,7 +14,11 @@
   运行：浏览器直接打开即可；云端同步依赖 Supabase（CDN 引入）
 
 【二、当前版本】
-  version : 2026-08-26 · v2（冲突检测 + 自动版本号）
+  version : 2026-08-27 · v3（多设备自动同步修复）
+  状态    ：可用于日常背诵 + 可作为新对话的接续基线
+
+【二、当前版本】
+  version : 2026-08-27 · v3（多设备自动同步修复）
   状态    ：可用于日常背诵 + 可作为新对话的接续基线
 
 【二之一、v2 新增（多设备同步防丢数据）】
@@ -26,6 +30,19 @@
   5. Supabase：上传携带 data_version；下载时云端版本较旧则保留本地数据
   6. 导入结果 toast 回显「新增 X 词 · 更新 Y 词」及版本关系
   7. 配套建表迁移见文末【附录：Supabase 迁移】；无 data_version 列时自动退化到时间戳仲裁
+
+【二之二、v3 新增（修复"不能多设备自动同步"）】
+  根因：① 自动同步循环被 getUserId() 守卫，未登录即空转；② 建表 SQL 只 enable RLS 却
+  缺 policy，写入被 42501 静默拦截（连接测试用 select 恰好掩盖）；③ 仅靠 60 秒轮询，无实时推送；
+  ④ 会话恢复失败无重试。修复如下：
+  1. Supabase Realtime：initSupa 连接成功后 setupRealtime() 订阅三表的 INSERT/UPDATE，
+     云端变更即时推送到所有在线设备 → 触发 syncPull（真正的"自动同步"），轮询降为兜底
+  2. RLS 策略：迁移 SQL 补齐三表的 for-all-to-authenticated policy + grant，并新增
+     detectRlsError()：捕获 42501/permission denied 时明确提示"RLS 策略未配置"
+  3. 会话韧性：tryRestoreSession 失败后指数退避自动重试（最多 3 次），避免永久未登录致同步停摆
+  4. 收敛提速：轮询周期 60s→30s，切前台/visibilitychange 节流 30s→15s
+  5. 迁移 SQL 独立为 supabase/migrations.sql（含 RLS policy + Realtime 副本标识与 publication）
+  配套：supabase/migrations.sql（一次性在 SQL Editor 执行即可）
 
 【三、已完成的功能清单】（不要重复实现）
   1. 核心听写：课本/单元选择、词量、开始听写、错词听写、TTS 发音、按住说话语音识别
@@ -51,6 +68,8 @@
   · buildQueue     ：组建听写队列，开头会清零会话计数——correct/wrong 还原必须放在它之后
   · reconcileSession：会话计数与今日桶的对齐核心，跨天自动清零
   · saveState / exportJSON / importJSON / applySnapshotText ：持久化与导入链路
+  · initSupa / setupRealtime / onRemoteChange ：Supabase 连接 + Realtime 实时同步
+  · syncPush / syncPull / detectRlsError / tryRestoreSessionWithRetry ：云端同步与韧性重试
   · getScopedStats / computeBookStats / rebuildMonthlyTotals ：统计聚合（注意「结转」逻辑，
     highCorrect/highWrong 放在非当前册下以避免污染当前册的月听写量）
   · EMBEDDED_SNAPSHOT ：内嵌于脚本中的存档快照常量（对应 vocab_snapshot.json 内容）
@@ -72,6 +91,7 @@
   1. 上传本文件即可，无需附带额外说明
   2. 若需指定起点，可附一句：「请先通读本注释头掌握现状，不要重复已实现部分」
   3. 每次改动完成后：更新本注释头的【二、版本】与对应清单项，并生成新快照固化状态
+  4. 涉及多设备同步的改动：务必同步 supabase/migrations.sql，并在 SQL Editor 重新执行
 ================================================================================
 -->
 <html lang="zh-CN">
@@ -480,6 +500,21 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
             <button class="btn btn-orange" id="btnDiag" style="background:#f59e0b;color:#fff">🔍 诊断登录</button>
           </div>
 
+      <!-- 同步后端选择器：Supabase / GitHub / 双写并存（并存且不冲突的核心开关） -->
+      <div class="backend-sel" style="margin:10px 0;padding:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px">
+        <div style="font-size:13px;font-weight:600;color:#1e3a5f;margin-bottom:6px">☁️ 同步后端（可并存）</div>
+        <label class="be-opt" data-be="supabase" style="display:flex;align-items:center;gap:6px;font-size:13px;margin:4px 0;cursor:pointer">
+          <input type="radio" name="syncBackend" value="supabase"> Supabase（实时双向 · 推荐主力）
+        </label>
+        <label class="be-opt" data-be="github" style="display:flex;align-items:center;gap:6px;font-size:13px;margin:4px 0;cursor:pointer">
+          <input type="radio" name="syncBackend" value="github"> GitHub（纯免费归档 · 无需额外服务）
+        </label>
+        <label class="be-opt" data-be="dual" style="display:flex;align-items:center;gap:6px;font-size:13px;margin:4px 0;cursor:pointer">
+          <input type="radio" name="syncBackend" value="dual"> 双写并存（Supabase 实时 + GitHub 归档备份）
+        </label>
+        <div id="backendHint" style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.5"></div>
+      </div>
+
       <div id="authUI" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px"></div>
 
           <div class="row" style="font-size:12px;color:#64748b;display:flex;align-items:center" id="syncStatus">
@@ -566,19 +601,35 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
     <div id="syncSubHost"></div>
     <!-- GitHub 一键同步（提交数据 → 触发 Actions 自动构建部署） -->
     <div class="gh-card">
-      <h3>☁️ GitHub 一键同步 · 全自动部署</h3>
+      <h3>☁️ GitHub 同步 · 免费归档后端</h3>
       <div class="gh-desc">
-        配置一次后，点「一键同步」即把当前数据推送到仓库，并<b>自动触发 GitHub Actions 构建 + 部署到 Pages</b>，全程无需手动操作。<br>
-        Token 使用 GitHub <b>Fine-grained PAT</b>（仅勾选本仓库 · Contents 读写权限），仅存于本机 localStorage，不会被上传。
+        数据以单文件 <code>data/vocab.json</code> 存到你的仓库，<b>零成本、无需额外服务</b>，可与 Supabase 并存。<br>
+        <b>模式说明：</b>选「GitHub」= 纯归档（每 5 分钟自动上传）；选「双写并存」= Supabase 实时双向 + GitHub 归档备份。<br>
+        <b>归档方式：</b>「直接推送」= 本机 PAT 直连 GitHub；「<b>通过 Actions</b>」= 由 GitHub Actions 服务端定时提交（推荐，省 PAT 配额、防 commit 风暴，需先在仓库开启 <code>.github/workflows/archive.yml</code>）。<br>
+        Token 使用 GitHub <b>Fine-grained PAT</b>（仅勾选本仓库 · Contents 读写权限；选「通过 Actions」时需额外勾选 <b>Repository events（write)</b> 用于触发 workflow），仅存于本机 localStorage，不会被上传。
       </div>
       <div class="gh-field"><label>仓库（owner/repo）</label><input id="ghRepo" placeholder="例如：zhangsan/vocab-app" /></div>
       <div class="gh-field"><label>分支</label><input id="ghBranch" placeholder="main" value="main" /></div>
       <div class="gh-field"><label>Personal Access Token（Fine-grained）</label><input id="ghToken" type="password" placeholder="github_pat_..." autocomplete="off" /></div>
       <div class="gh-field"><label>数据文件路径（仓库内）</label><input id="ghPath" placeholder="data/vocab.json" value="data/vocab.json" /></div>
+      <div class="gh-field">
+        <label>归档方式（提交到仓库的策略）</label>
+        <select id="ghArchiveVia">
+          <option value="direct">直接推送（本机 PAT 直连，兼容旧版）</option>
+          <option value="actions">通过 GitHub Actions（服务端定时提交，推荐）</option>
+        </select>
+      </div>
+      <div class="gh-field" id="ghScheduleBox" style="display:none">
+        <label>服务端归档周期（Actions cron 表达式，默认每 6 小时一次）</label>
+        <input id="ghCron" placeholder="0 */6 * * *" value="0 */6 * * *" />
+        <small style="color:#64748b">格式：分 时 日 月 周。此为建议值，最终以仓库内 <code>.github/workflows/archive.yml</code> 的 schedule 为准；留空 = 仅手动触发。</small>
+      </div>
       <div class="gh-actions">
         <button class="btn btn-blue" id="ghSave">💾 保存配置</button>
-        <button class="btn btn-green" id="ghSync">☁️ 一键同步（确认即提交并自动部署）</button>
-        <a class="btn btn-blue" id="ghActionsLink" target="_blank" rel="noopener" style="text-decoration:none">🔧 查看部署状态</a>
+        <button class="btn btn-green" id="ghSync">☁️ 上传到 GitHub</button>
+        <button class="btn btn-purple" id="ghPull">📥 从 GitHub 恢复归档</button>
+        <button class="btn btn-blue" id="ghTest">🔍 连接测试</button>
+        <a class="btn btn-blue" id="ghActionsLink" target="_blank" rel="noopener" style="text-decoration:none">🔧 查看 Actions</a>
       </div>
       <div class="gh-status" id="ghStatus">未同步</div>
     </div>
@@ -9954,6 +10005,18 @@ function detectSessionMigrationNeed(err){
   }
 }
 
+// 识别 RLS 权限错误（缺 INSERT/UPDATE policy）：启用 RLS 后未配策略会导致 upsert 静默失败
+function detectRlsError(err){
+  var msg = String((err&&err.message)||err||"");
+  var code = (err&&err.code)||"";
+  var rls = /permission denied|violates row-level security|42501|insufficient_privilege|new row violates row-level security/i.test(msg) || code==="42501";
+  if(rls){
+    updateSyncStatus("RLS 策略未配置（详见迁移 SQL）", false);
+    console.error("[同步] 疑似 RLS 拦截：请在 Supabase SQL Editor 执行 migrations.sql 中的 policy 语句。原始错误：", err);
+  }
+  return rls;
+}
+
 var g = {
   deviceId: localStorage.getItem("vocab_device") || (Math.random().toString(36).slice(2)+Date.now().toString(36)),
   book: "必修一", unit: "__all", n: 20, idx: 0,
@@ -9970,7 +10033,14 @@ var g = {
   _needSessionMigration: false,
   // 单调递增数据版本号 + 最近更新时间：每次保存 +1，用于多设备冲突检测，永不回退
   dataVersion: 0,
-  updatedAt: 0
+  updatedAt: 0,
+  // —— 多后端并存（Supabase / GitHub / dual）——
+  // 约定：仅 Supabase 为实时真相源；GitHub 只做归档写入，避免两端对写冲突
+  syncBackend: (function(){ try{return localStorage.getItem("vocab_sync_backend")||"supabase";}catch(e){return "supabase";} })(),
+  ghRepo:   (function(){ try{return localStorage.getItem("vocab_gh_repo")||"";}catch(e){return "";} })(),
+  ghBranch: (function(){ try{return localStorage.getItem("vocab_gh_branch")||"main";}catch(e){return "main";} })(),
+  ghToken:  (function(){ try{return localStorage.getItem("vocab_gh_token")||"";}catch(e){return "";} })(),
+  ghPath:   (function(){ try{return localStorage.getItem("vocab_gh_path")||"data/vocab.json";}catch(e){return "data/vocab.json";} })()
 };
 // stats 结构: stats[date] = { c:总数, w:总数, byUnit: { "book|unit": {c,w} } }
 function statsKey(bk,un){ return bk+"|"+un; }
@@ -10566,8 +10636,8 @@ function init(){
   renderBackupList();
   document.getElementById("btnSave").onclick = saveSupaConfig;
   document.getElementById("btnTest").onclick = testSupa;
-  document.getElementById("btnPush").onclick = function(){ syncPush(true); };
-  document.getElementById("btnPull").onclick = function(){ syncPull(true); };
+  document.getElementById("btnPush").onclick = function(){ dispatchPush(true); };
+  document.getElementById("btnPull").onclick = function(){ dispatchPull(true); };
   var btnDiag = document.getElementById("btnDiag");
   if(btnDiag) btnDiag.onclick = diagAuth;
 
@@ -10597,18 +10667,20 @@ function init(){
   runLedgerCheck(false); // 页面加载即校验账本，状态常驻显示在统计栏
   if(g.supaUrl && g.supaKey) initSupa();
   renderAuthUI();
-  setTimeout(function(){ try{ if(g.supa) syncPull(false); }catch(e){ console.error("自动同步失败",e); g._syncing=false; updateSyncStatus("自动同步失败",false); } }, 3000);
+  setTimeout(function(){ try{ dispatchPull(false); }catch(e){ console.error("自动同步失败",e); g._syncing=false; updateSyncStatus("自动同步失败",false); } }, 3000);
   setInterval(saveState, 5000);
-  // 周期性自动同步：每 60 秒静默拉取+推送，保证多设备实时一致（仅登录后生效）
+  // 周期性自动同步：每 30 秒静默推送，并保证至少每 15 秒拉取一次，
+  // 兼顾多设备收敛速度与请求开销（仅登录后生效；Realtime 优先，此为兜底轮询）
   setInterval(function(){
-    if(!getUserId() || !g.supa) return;
+    // 多后端调度：按 g.syncBackend 决定走 Supabase / GitHub / 双写
+    // （GitHub 归档在 dispatcher 内部节流为每 5 分钟一次，避免 commit 风暴）
     var now = Date.now();
-    if(now - _lastAutoPull > 30000){ _lastAutoPull = now; syncPull(false); }
-    syncPush(false);
-  }, 60000);
-  window.addEventListener("beforeunload", function(){ saveState(); if(g.supaUrl && g.supaKey && getUserId()) syncPush(false); });
+    if(now - _lastAutoPull > 15000){ _lastAutoPull = now; dispatchPull(false); }
+    dispatchPush(false);
+  }, 30000);
+  window.addEventListener("beforeunload", function(){ saveState(); dispatchPush(false); });
   // pagehide 在移动端/SPA 切换时比 beforeunload 更可靠，尽力把最新数据上传
-  window.addEventListener("pagehide", function(){ saveState(); if(g.supaUrl && g.supaKey && getUserId()) syncPush(false); });
+  window.addEventListener("pagehide", function(){ saveState(); dispatchPush(false); });
 }
 
 // ===== 课本变化 =====
@@ -10855,7 +10927,7 @@ function endQuiz(){
   document.getElementById("mainContainer").classList.remove("hidden");
   toast("听写已退出：正确 " + g.correct + " / 错误 " + g.wrong);
   saveState();
-  if(g.supaUrl && g.supaKey) syncPush(false);
+  if(g.supaUrl && g.supaKey) dispatchPush(false);
 }
 
 // ===== 错词管理 =====
@@ -11258,14 +11330,6 @@ function importJSON(e){
 }
 
 
-// ===== 同步超时保护（防止永久"进行中"）=====
-function syncWithTimeout(promise, ms){
-  var timeoutP = new Promise(function(_, reject){
-    setTimeout(function(){ reject(new Error("同步超时("+ms/1000+"秒)，请检查网络或Supabase配置")); }, ms);
-  });
-  return Promise.race([promise, timeoutP]);
-}
-
 // ===== Supabase 同步（完整版：Auth 登录 + 三表同步）=====
 
 // --- 登录态管理 ---
@@ -11371,7 +11435,7 @@ async function doRegister(){
     } else if(data.session){
       setSession(data.session); setUserId(data.user.id);
       toast("注册并登录成功 ✅"); renderAuthUI(); updateSyncStatus("已登录",true);
-      syncPull(true);
+      dispatchPull(true);
     }
   }catch(e){ toast("注册异常："+e.message); }
 }
@@ -11388,8 +11452,8 @@ async function doLogin(){
     if(data.session && data.user){
       setSession(data.session); setUserId(data.user.id);
       toast("登录成功 ✅"); renderAuthUI(); updateSyncStatus("已登录",true);
-      // 登录后自动拉取云端数据
-      syncPull(true);
+      // 登录后自动拉取云端数据（按当前后端模式分发）
+      dispatchPull(true);
     }
   }catch(e){ toast("登录异常："+e.message); }
 }
@@ -11439,9 +11503,41 @@ function initSupa(){
   try{
     if(!g.supaUrl||!g.supaKey){ updateSyncStatus("未配置",false); return; }
     if(g.supa) return; // 已初始化
-    g.supa = window.supabase.createClient(g.supaUrl, g.supaKey);
+    g.supa = window.supabase.createClient(g.supaUrl, g.supaKey, {
+      // 启用 Realtime，使云端变更能即时推送到所有在线设备
+      realtime: { params: { eventsPerSecond: 10 } }
+    });
     updateSyncStatus("已连接",true);
+    setupRealtime(); // 连接成功后立即订阅云端变更（多设备实时同步核心）
   }catch(e){ g.supa=null; updateSyncStatus("连接失败："+e.message,false); }
+}
+
+// ===== 多设备实时同步（Supabase Realtime）=====
+// 任一设备写入云端后，其它在线设备通过 postgres_changes 即时收到，
+// 触发一次 syncPull，实现"一处修改、处处自动更新"，无需等待 60 秒轮询。
+var _rtTimer = null;
+function onRemoteChange(payload){
+  if(g._syncing) return; // 忽略本设备刚写入的回环
+  clearTimeout(_rtTimer);
+  _rtTimer = setTimeout(function(){ try{ syncPull(false); }catch(e){} }, 800);
+}
+function setupRealtime(){
+  if(!g.supa || g._rt) return; // 已订阅则跳过
+  try{
+    // 旧版 supabase-js 用 .channel()，新版用 .channel(...).on(...).subscribe()
+    var ch = g.supa.channel('vocab-sync-' + (g.deviceId||'anon'))
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'study_sessions' }, onRemoteChange)
+      .on('postgres_changes', { event:'UPDATE', schema:'public', table:'study_sessions' }, onRemoteChange)
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'vocab_progress'  }, onRemoteChange)
+      .on('postgres_changes', { event:'UPDATE', schema:'public', table:'vocab_progress'  }, onRemoteChange)
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'wrong_words'    }, onRemoteChange)
+      .on('postgres_changes', { event:'UPDATE', schema:'public', table:'wrong_words'    }, onRemoteChange)
+      .subscribe(function(status){
+        if(status === 'SUBSCRIBED'){ console.info('[sync] Realtime 已连接，多设备实时同步就绪'); }
+        else if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT'){ console.warn('[sync] Realtime 订阅异常：', status); }
+      });
+    g._rt = ch;
+  }catch(e){ console.warn('[sync] Realtime 初始化失败（不影响轮询兜底）', e); }
 }
 
 // --- 上传（三表全部推送）---
@@ -11539,8 +11635,12 @@ async function syncPush(manual){
     var msg = String((e&&e.message)||e||"");
     var code = (e&&e.code)||"";
     // 识别需要初始化数据库的典型错误
-    if(manual) toast("上传失败："+msg);
-    updateSyncStatus("上传失败",false);
+    if(!detectRlsError(e)){ // RLS 拦截已在内部更新状态
+      if(manual) toast("上传失败："+msg);
+      updateSyncStatus("上传失败",false);
+    } else if(manual) {
+      toast("上传失败：RLS 策略未配置，请执行 migrations.sql");
+    }
   }finally{ g._syncing=false; }
 }
 
@@ -11665,8 +11765,12 @@ async function syncPull(manual){
     updateSyncStatus("已同步 "+new Date().toLocaleTimeString(),true);
   }catch(e){
     console.error("下载异常",e);
-    if(manual) toast("下载失败："+e.message);
-    updateSyncStatus("下载失败",false);
+    if(!detectRlsError(e)){
+      if(manual) toast("下载失败："+e.message);
+      updateSyncStatus("下载失败",false);
+    } else if(manual) {
+      toast("下载失败：RLS 策略未配置，请执行 migrations.sql");
+    }
   }finally{ g._syncing=false; }
 }
 
@@ -11695,16 +11799,345 @@ async function testSupa(){
 }
 
 var _dp;
-function debouncePush(){ clearTimeout(_dp); _dp = setTimeout(function(){ var uid=getUserId(); if(uid) syncPush(false); }, 5000); }
+function debouncePush(){ clearTimeout(_dp); _dp = setTimeout(function(){ try{ dispatchPush(false); }catch(e){} }, 5000); }
 
 // 页面加载后尝试自动恢复登录 + 自动拉取
-setTimeout(function(){
+// 韧性增强：恢复失败时按指数退避自动重试（最多 3 次），避免 refresh token 过期后
+// 用户永久处于"未登录"状态，导致 60 秒自动同步循环空转（见 init 中 setInterval 的 getUserId 守卫）
+var _restoreAttempts = 0;
+function tryRestoreSessionWithRetry(){
   tryRestoreSession().then(function(ok){
-    if(ok){ syncPull(false); }
+    if(ok){ dispatchPull(false); return; }
+    _restoreAttempts++;
+    if(_restoreAttempts < 3){
+      var delay = 4000 * Math.pow(2, _restoreAttempts-1); // 4s, 8s
+      console.warn('[sync] 会话恢复失败，' + delay + 'ms 后重试（' + (_restoreAttempts+1) + '/3）');
+      setTimeout(tryRestoreSessionWithRetry, delay);
+    }
+  }).catch(function(){ /* 静默，等待重试 */ });
+}
+setTimeout(tryRestoreSessionWithRetry, 1500);
+
+
+
+
+
+// ===== 多后端并存（Supabase / GitHub / dual）注入起点 =====
+(function(){
+"use strict";
+// =====================================================================
+// ===== 多后端并存（SyncProvider 抽象）==============================
+// =====================================================================
+// 设计目标：让 Supabase 与 GitHub 两条同步通道并存且不冲突。
+//   · Supabase —— 实时双向（Realtime），毫秒级多设备收敛（主力）
+//   · GitHub   —— 纯免费归档（仓库内 data/vocab.json），无需额外服务
+//   · dual     —— 双写并存：Supabase 是唯一「实时真相源」，GitHub 只做
+//                 单向归档写入（每 5 分钟节流），永不对写、永不发生冲突。
+//
+// 业务层（错词本 / 统计 / 已掌握）零改动：所有 push/pull 最终都收敛到
+// saveState / applySnapshotText 这一对既有的持久化与合并入口。
+// =====================================================================
+
+// ---------- 通用工具 ----------
+function btoaUnicode(str){ return btoa(unescape(encodeURIComponent(str))); }
+function b64Decode(b64){
+  var bin = atob(String(b64).replace(/\s/g, ""));
+  try { return decodeURIComponent(escape(bin)); } catch (e) { return bin; }
+}
+// 构造一份「可上传的完整快照」（形状与 applySnapshotText 的输入一致）
+function buildSyncSnapshot(){
+  try { normalizeBuckets(); recomputeTotals(); } catch (e) {}
+  return {
+    version: 3,
+    deviceId: g.deviceId,
+    dataVersion: (g.dataVersion || 0),
+    updatedAt: (g.updatedAt || Date.now()),
+    book: g.book, unit: g.unit, idx: g.idx,
+    correct: g.correct, wrong: g.wrong,
+    _sessionDate: (g._sessionDate || todayStr()),
+    _sessionUpdatedAt: (g._sessionUpdatedAt || Date.now()),
+    totalCorrect: g.totalCorrect, totalWrong: g.totalWrong,
+    wrongBook: g.wrongBook,
+    stats: g.stats,
+    masteredWords: g.masteredWords,
+    monthlyTotals: (g.monthlyTotals || {}),
+    mode: g.mode
+  };
+}
+
+// ---------- GitHub 配置持久化 ----------
+function loadGhConfig(){
+  try {
+    g.ghRepo   = localStorage.getItem("vocab_gh_repo")   || "";
+    g.ghBranch = localStorage.getItem("vocab_gh_branch") || "main";
+    g.ghToken  = localStorage.getItem("vocab_gh_token")  || "";
+    g.ghPath   = localStorage.getItem("vocab_gh_path")   || "data/vocab.json";
+    g.archiveVia = localStorage.getItem("vocab_gh_archive_via") || "direct"; // direct | actions
+    g.ghCron     = localStorage.getItem("vocab_gh_cron")   || "0 */6 * * *";
+    g.syncBackend = localStorage.getItem("vocab_sync_backend") || "supabase";
+  } catch (e) {}
+}
+function saveGhConfig(){
+  g.ghRepo   = (document.getElementById("ghRepo").value   || "").trim();
+  g.ghBranch = (document.getElementById("ghBranch").value || "").trim() || "main";
+  g.ghToken  = (document.getElementById("ghToken").value  || "").trim();
+  g.ghPath   = (document.getElementById("ghPath").value   || "").trim() || "data/vocab.json";
+  g.archiveVia = (document.getElementById("ghArchiveVia").value || "direct").trim();
+  g.ghCron     = (document.getElementById("ghCron").value || "").trim();
+  try {
+    localStorage.setItem("vocab_gh_repo",   g.ghRepo);
+    localStorage.setItem("vocab_gh_branch", g.ghBranch);
+    localStorage.setItem("vocab_gh_token",  g.ghToken);
+    localStorage.setItem("vocab_gh_path",   g.ghPath);
+    localStorage.setItem("vocab_gh_archive_via", g.archiveVia);
+    localStorage.setItem("vocab_gh_cron",   g.ghCron);
+  } catch (e) {}
+}
+
+// ---------- GitHub API 封装 ----------
+function ghApi(path, opt){
+  opt = opt || {};
+  var headers = { "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+  if (g.ghToken) headers["Authorization"] = "Bearer " + g.ghToken;
+  return fetch("https://api.github.com" + path, {
+    method: opt.method || "GET",
+    headers: headers,
+    body: opt.body ? JSON.stringify(opt.body) : undefined
+  }).then(function (r) {
+    return r.json().then(function (j) { return { ok: r.ok, status: r.status, data: j }; });
   });
-}, 1500);
+}
+function setGhStatus(text, cls){
+  var el = document.getElementById("ghStatus");
+  if (!el) return;
+  var c = cls === "ok" ? "#10b981" : (cls === "err" ? "#ef4444" : (cls === "syncing" ? "#f59e0b" : "#64748b"));
+  el.innerHTML = '<span class="sync-status-dot ' + (cls === "ok" ? "online" : (cls === "err" ? "offline" : "syncing")) + '"></span> ' + text;
+  el.style.color = c;
+}
 
+// ---------- GitHub Provider ----------
+var GitHubProvider = {
+  isConfigured: function () {
+    return !!(g.ghRepo && g.ghRepo.indexOf("/") > 0 && g.ghToken && g.ghBranch && g.ghPath);
+  },
+  // 上传：先读远端版本做冲突检测（远端更新则先合并再推），永不覆盖丢数据
+  push: async function (manual) {
+    if (!this.isConfigured()) { if (manual) toast("请先在下方填写并「保存」GitHub 配置"); return; }
+    // 「通过 Actions」模式：本机只触发 workflow（repository_dispatch），由服务端提交，杜绝 commit 风暴
+    if ((g.archiveVia || "direct") === "actions") { return this.pushViaActions(manual); }
+    var rel = g.ghPath.replace(/^\//, "");
+    var enc = encodeURIComponent(rel);
+    var qs  = "?ref=" + encodeURIComponent(g.ghBranch);
+    setGhStatus("上传中...", "syncing");
+    try {
+      var head = await ghApi("/repos/" + g.ghRepo + "/contents/" + enc + qs);
+      var remoteSha = (head.ok && head.data && head.data.sha) ? head.data.sha : null;
+      // 冲突检测：远端版本号较新 → 先以「文件导入(合并)」方式合入本地，再上传
+      if (remoteSha && head.data && head.data.content) {
+        try {
+          var remoteJson = JSON.parse(b64Decode(head.data.content));
+          var remoteVer  = parseInt(remoteJson.dataVersion) || 0;
+          if (remoteVer > (g.dataVersion || 0)) {
+            applySnapshotText(JSON.stringify(remoteJson), { source: "file" });
+            if (manual) toast("检测到远端更新 v" + remoteVer + "，已先合并再上传");
+          }
+        } catch (me) { /* 解析失败不阻断上传 */ }
+      }
+      var snap = buildSyncSnapshot();
+      var body = {
+        message: "chore(sync): 更新单词背诵数据 [自动同步]",
+        content: btoaUnicode(JSON.stringify(snap)),
+        branch: g.ghBranch
+      };
+      if (remoteSha) body.sha = remoteSha; // 已存在 → 更新（需 sha）；不存在 → 创建
+      var res = await ghApi("/repos/" + g.ghRepo + "/contents/" + enc, { method: "PUT", body: body });
+      if (res.ok) {
+        setGhStatus("已同步 " + new Date().toLocaleTimeString(), "ok");
+        if (manual) toast("GitHub 上传成功 ✅");
+      } else {
+        var msg = (res.data && (res.data.message || res.data.documentation_url)) || ("HTTP " + res.status);
+        setGhStatus("上传失败：" + msg, "err");
+        if (manual) toast("GitHub 上传失败：" + msg);
+      }
+    } catch (e) {
+      setGhStatus("上传异常", "err");
+      if (manual) toast("GitHub 上传异常：" + (e && e.message || e));
+    }
+  },
+  // 下载：把仓库内的完整快照以「文件导入(合并)」方式合入，幂等、不丢数据
+  pull: async function (manual) {
+    if (!this.isConfigured()) { if (manual) toast("请先填写并保存 GitHub 配置"); return; }
+    var rel = g.ghPath.replace(/^\//, "");
+    var url = "/repos/" + g.ghRepo + "/contents/" + encodeURIComponent(rel) + "?ref=" + encodeURIComponent(g.ghBranch);
+    setGhStatus("下载中...", "syncing");
+    try {
+      var res = await ghApi(url);
+      if (!res.ok || !res.data || !res.data.content) {
+        setGhStatus("无归档或无权限", "err");
+        if (manual) toast("未找到归档文件（先在任意设备上传一次）");
+        return;
+      }
+      var json = JSON.parse(b64Decode(res.data.content));
+      applySnapshotText(JSON.stringify(json), { source: "file" });
+      setGhStatus("已合并 " + new Date().toLocaleTimeString(), "ok");
+      if (manual) toast("已从 GitHub 归档合并 ✅");
+    } catch (e) {
+      setGhStatus("下载失败", "err");
+      if (manual) toast("GitHub 下载失败：" + (e && e.message || e));
+    }
+  },
+  test: async function () {
+    if (!this.isConfigured()) { toast("请先填写并保存 GitHub 配置"); return; }
+    var res = await ghApi("/repos/" + g.ghRepo);
+    if (res.ok) { toast("GitHub 连接成功 ✅"); setGhStatus("已连接", "ok"); }
+    else {
+      var m = (res.data && res.data.message) || ("HTTP " + res.status);
+      toast("连接失败：" + m); setGhStatus("未连接：" + m, "err");
+    }
+  },
+  // 通过 GitHub Actions 服务端提交归档：本机只发一个 repository_dispatch 事件（携带快照），
+  // 由工作流在服务端写文件 + commit + push。优点：省 PAT 配额、防 commit 风暴、可服务端定时。
+  // 需仓库已放置 .github/workflows/archive.yml，且 PAT 勾选 Repository events (write)。
+  pushViaActions: async function (manual) {
+    setGhStatus("触发 Actions 归档...", "syncing");
+    try {
+      var snap = buildSyncSnapshot();
+      var b64 = btoaUnicode(JSON.stringify(snap));
+      // repository_dispatch 的 client_payload 经 base64 压缩，规避明文体积/特殊字符问题
+      var body = {
+        event_type: "vocab-archive",
+        client_payload: { snapshot_b64: b64, path: g.ghPath.replace(/^\//, ""), branch: g.ghBranch }
+      };
+      var res = await ghApi("/repos/" + g.ghRepo + "/dispatches", { method: "POST", body: body });
+      if (res.status === 204 || res.ok) {
+        setGhStatus("已触发 Actions，服务端归档中...", "syncing");
+        if (manual) toast("已触发 GitHub Actions 归档 ✅（服务端提交，稍后可在 Actions 页查看）");
+      } else {
+        var em = (res.data && (res.data.message || res.data.errors)) || ("HTTP " + res.status);
+        setGhStatus("触发失败：" + em, "err");
+        if (manual) toast("Actions 触发失败：" + em + "（确认 PAT 有 Repository events 权限且 workflow 已部署）");
+      }
+    } catch (e) {
+      setGhStatus("触发异常", "err");
+      if (manual) toast("Actions 触发异常：" + (e && e.message || e));
+    }
+  }
+};
 
+// =====================================================================
+// ===== 调度层（SyncManager）：按后端模式分发 push / pull ============
+// =====================================================================
+var _lastGhPush = 0;
+var GH_PUSH_INTERVAL = 5 * 60 * 1000; // 归档模式：同一设备至少 5 分钟一次，避免 commit 风暴
+function _shouldGhPush() { return Date.now() - _lastGhPush > GH_PUSH_INTERVAL; }
+
+async function dispatchPush(manual) {
+  var b = (g.syncBackend || "supabase");
+  // ① Supabase（实时双向）：supabase / dual 模式下都写
+  if (b === "supabase" || b === "dual") { try { await syncPush(manual); } catch (e) {} }
+  // ② GitHub：仅在「手动」或「归档节流到期」时写，杜绝频繁提交
+  var ghActive = (b === "github" || b === "dual");
+  var ghManual  = (b === "github" && manual) || (b === "dual" && manual);
+  if (ghManual || (ghActive && _shouldGhPush())) {
+    try { await GitHubProvider.push(manual); _lastGhPush = Date.now(); } catch (e) {}
+  }
+}
+
+async function dispatchPull(manual) {
+  var b = (g.syncBackend || "supabase");
+  if (b === "supabase" || b === "dual") {
+    // dual 模式：Supabase 是唯一实时真相源；GitHub 只归档，按需通过「从 GitHub 恢复归档」拉取
+    try { await syncPull(manual); } catch (e) {}
+  } else if (b === "github") {
+    try { await GitHubProvider.pull(manual); } catch (e) {}
+  }
+}
+
+// =====================================================================
+// ===== UI：后端选择器 + GitHub 卡片按钮绑定 ========================
+// =====================================================================
+function updateBackendHint() {
+  var h = document.getElementById("backendHint");
+  if (!h) return;
+  var map = {
+    supabase: "<b>Supabase（实时双向）</b>：毫秒级多设备同步，需开通 Supabase 项目并配置 URL/Key。",
+    github:  "<b>GitHub（归档备份）</b>：每 5 分钟自动归档到仓库，零成本；首次用「从 GitHub 恢复归档」拉取。",
+    dual:    "<b>双写并存</b>：Supabase 实时双向 + GitHub 每 5 分钟归档备份，各司其职、永不对写。"
+  };
+  h.innerHTML = (map[g.syncBackend] || "")
+    + '<br>约定：仅 Supabase 为实时真相源，GitHub 只做归档写入 —— 这是并存且不冲突的关键。';
+  // 联动高亮当前激活的后端标签
+  var cards = document.querySelectorAll(".backend-sel .be-opt");
+  cards.forEach(function (el) {
+    el.style.fontWeight = (el.getAttribute("data-be") === g.syncBackend) ? "700" : "400";
+    el.style.color      = (el.getAttribute("data-be") === g.syncBackend) ? "#1e3a5f" : "#475569";
+  });
+}
+
+function setupSyncBackend() {
+  loadGhConfig();
+  var setVal = function (id, v) { var el = document.getElementById(id); if (el && !el.value) el.value = (v || ""); };
+  setVal("ghRepo",   g.ghRepo);
+  setVal("ghBranch", g.ghBranch);
+  setVal("ghToken",  g.ghToken);
+  setVal("ghPath",   g.ghPath);
+  var av = document.getElementById("ghArchiveVia");
+  if (av) av.value = (g.archiveVia || "direct");
+  setVal("ghCron", g.ghCron);
+  var scheduleBox = document.getElementById("ghScheduleBox");
+  function toggleScheduleBox() {
+    if (!scheduleBox) return;
+    scheduleBox.style.display = (av && av.value === "actions") ? "block" : "none";
+  }
+  if (av) { av.addEventListener("change", toggleScheduleBox); }
+  toggleScheduleBox();
+  var radios = document.getElementsByName("syncBackend");
+  for (var i = 0; i < radios.length; i++) { radios[i].checked = (radios[i].value === g.syncBackend); }
+  updateBackendHint();
+  for (var j = 0; j < radios.length; j++) {
+    radios[j].addEventListener("change", function (ev) {
+      g.syncBackend = ev.target.value;
+      try { localStorage.setItem("vocab_sync_backend", g.syncBackend); } catch (e) {}
+      updateBackendHint();
+      var names = { supabase: "Supabase", github: "GitHub", dual: "双写并存" };
+      toast("同步后端已切换：" + (names[g.syncBackend] || g.syncBackend));
+      // 切换后立刻收敛一次（拉取新后端的已有数据）
+      setTimeout(function () { try { dispatchPull(true); } catch (e) {} }, 200);
+    });
+  }
+  // GitHub 卡片按钮
+  var ghSaveEl  = document.getElementById("ghSave");
+  if (ghSaveEl) ghSaveEl.onclick = function () {
+    saveGhConfig();
+    setVal("ghBranch", g.ghBranch);
+    var acts = document.getElementById("ghActionsLink");
+    if (acts && g.ghRepo) acts.href = "https://github.com/" + g.ghRepo + "/actions";
+    setGhStatus("配置已保存", "ok");
+    toast("GitHub 配置已保存 ✅");
+  };
+  var ghSyncEl = document.getElementById("ghSync");
+  if (ghSyncEl) ghSyncEl.onclick = function () { GitHubProvider.push(true); };
+  var ghPullEl = document.getElementById("ghPull");
+  if (ghPullEl) ghPullEl.onclick = function () { GitHubProvider.pull(true); };
+  var ghTestEl = document.getElementById("ghTest");
+  if (ghTestEl) ghTestEl.onclick = function () { GitHubProvider.test(); };
+}
+
+// 兼容旧调用名（如有外部脚本引用 ghSyncNow）
+var ghSyncNow = function (manual) { return GitHubProvider.push(manual); };
+
+// 初始化：回填配置 + 绑定选择器/按钮
+try { setupSyncBackend(); } catch(e){ console.error('[sync-backends] init failed', e); }
+
+// 导出到全局：本模块整体包在 IIFE 内，而既有调用点（btnPush/btnPull 回调、
+// endQuiz、自动同步 setInterval、登录回调、visibilitychange）位于 IIFE 之外，
+// 需把调度入口挂到 window，否则运行时会 ReferenceError。
+// 约定：仅 dispatchPush / dispatchPull 是外部契约，其余（GitHubProvider、
+// buildSyncSnapshot 等）仅供模块内部使用，不对外暴露。
+window.dispatchPush = dispatchPush;
+window.dispatchPull = dispatchPull;
+})();
+// ===== 多后端并存 注入终点 =====
 
 // ===== 设置子菜单（底部入口）=====
 (function setupSettingsMenu(){
@@ -12365,11 +12798,11 @@ document.addEventListener('visibilitychange', function(){
   if(document.visibilityState === 'visible'){
     g._syncing = false; // 从后台回来强制解除锁定
     if(g.supa) { try{ g.supa.auth.getSession(); }catch(e){} }
-    // 切回前台自动拉取云端最新数据（多设备同步），30秒内不重复
+    // 切回前台自动拉取云端最新数据（按后端模式分发，15秒内不重复）
     var now = Date.now();
-    if(getUserId() && g.supa && now - _lastAutoPull > 30000){
+    if(now - _lastAutoPull > 15000){
       _lastAutoPull = now;
-      syncPull(false);
+      dispatchPull(false);
     }
   }
 });
@@ -12435,6 +12868,30 @@ create table if not exists public.study_sessions (
 alter table public.vocab_progress enable row level security;
 alter table public.wrong_words enable row level security;
 alter table public.study_sessions enable row level security;
+--------------------------------------------------------------------------------
+-- ★★★ 关键：仅 enable RLS 而没有 policy = anon 用户写入被拒(42501) ★★★
+--    「连接测试」用 select head:true 能通过，恰好掩盖写入被拦，
+--    导致「立即上传」永远失败、多设备无法同步。必须执行以下 policy。
+--------------------------------------------------------------------------------
+create policy if not exists "vocab_progress_owner" on public.vocab_progress
+  for all to authenticated using (auth.uid()::text = user_id) with check (auth.uid()::text = user_id);
+create policy if not exists "wrong_words_owner" on public.wrong_words
+  for all to authenticated using (auth.uid()::text = user_id) with check (auth.uid()::text = user_id);
+create policy if not exists "study_sessions_owner" on public.study_sessions
+  for all to authenticated using (auth.uid()::text = user_id) with check (auth.uid()::text = user_id);
+grant all on public.vocab_progress to authenticated;
+grant all on public.wrong_words to authenticated;
+grant all on public.study_sessions to authenticated;
+--------------------------------------------------------------------------------
+-- Realtime 实时同步：开启表的复制标识并加入实时发布，配合前端 setupRealtime()
+-- 任一设备写入即推送至其它在线设备（INSERT/UPDATE 均已在前端订阅）。
+--------------------------------------------------------------------------------
+alter table public.vocab_progress replica identity full;
+alter table public.wrong_words replica identity full;
+alter table public.study_sessions replica identity full;
+alter publication supabase_realtime add table public.vocab_progress;
+alter publication supabase_realtime add table public.wrong_words;
+alter publication supabase_realtime add table public.study_sessions;
 ================================================================================
 --></body>
 </html>
