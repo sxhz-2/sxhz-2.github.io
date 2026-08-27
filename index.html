@@ -14,12 +14,33 @@
   运行：浏览器直接打开即可；云端同步依赖 Supabase（CDN 引入）
 
 【二、当前版本】
-  version : 2026-08-27 · v3（多设备自动同步修复）
+  version : 2026-08-28 · v5（分册明细渲染隔离 · 红框条目彻底消失）
   状态    ：可用于日常背诵 + 可作为新对话的接续基线
 
-【二、当前版本】
-  version : 2026-08-27 · v3（多设备自动同步修复）
-  状态    ：可用于日常背诵 + 可作为新对话的接续基线
+【二之四、v5 新增（修复"分册明细仍显示 __diag__ 条目"）】
+  现象：页面「听写统计 → 分册明细」表格出现 __diag__ / __连通测试_xxx 行（正确数 0/2/1）。
+  根因：aggregateByBook() 遍历 stats.byUnit 时用 uKey.split("|")[0] 作册名，
+    探针键 "__diag__|probe"、"__连通测试_<ts>|probe" 的册名段即 "__diag__"/"__连通测试_xxx"，
+    直接进入分册表格——这是渲染侧入口，syncPull/normalizeBuckets 的过滤管不到此处。
+  修复：aggregateByBook 循环入口加 isDiagKey(uKey) return（与 syncPull/清洗共用单一判定入口），
+    形成「syncPull 拦截 → normalizeBuckets 存量清除 → aggregateByBook 渲染防线」三层隔离。
+  注：连通测试按钮位置未变，仍在「⚙️ 设置 → 同步设置」；本册正确数/月听写量等口径不受影响。
+
+【二之三、v4 新增（连通测试彻底留在设置里，不污染听写统计）】
+  根因：「🔬 连通测试(写云端)」会向云端三张表写入探针行（vocab_progress.book="__diag__"、
+  word="__连通测试_<时间戳>" / wrong_words.word="__连通测试_wrong_<时间戳>"），而 syncPull 的合并逻辑
+  未过滤这些诊断行，导致探针数据被拉回并合进 g.stats / g.wrongBook，
+  最终显示在「听写统计 / 改错统计 / 错词本」——即"连通测试跑完后今日总量/正确率/错词本被污染"。
+  按钮本身已在「⚙️ 设置 → 同步设置」内（符合"保留在设置里"），本次只堵数据回流路径。
+  修复如下：
+  1. syncPull·vocab_progress：循环入口过滤 /^__连通测试_|^__diag__/ 及 book==="__diag__"，
+     探针行直接 return，不进入任何日期桶 → 今日总量/今日正确率/月听写量不再被污染
+  2. syncPull·wrong_words：同上过滤，探针错词不进 g.wrongBook → 改错统计/错词本干净
+  3. syncPush·wrong_words：上传端同步过滤，已混入本地的探针不再被推上云端、避免跨设备回灌
+  4. 正则采用前缀匹配 /^__连通测试_/（注意：探针形如 "__连通测试_wrong_"，
+     "__连通测试__" 这种带尾随双下划线的写法是匹配不到的——已实测验证并修正）
+  5. 连通测试按钮（#btnTest / #btnConnTest）位置不变，仍在「同步设置」面板内，
+     不在听写统计卡片中
 
 【二之一、v2 新增（多设备同步防丢数据）】
   1. 单调递增 dataVersion + updatedAt：每次 saveState 版本+1，随 localStorage / 导出 JSON 持久化
@@ -10117,10 +10138,20 @@ function recomputeTotals(){
 }
 // 规范化：让每个日期桶的 c/w（缓存）= byUnit 各项之和，消除历史脏数据导致的漂移
 function normalizeBuckets(){
+  var cleaned = 0;
   Object.keys(g.stats||{}).forEach(function(k){
     if(!isStatsDateKey(k)) return;
     var st = g.stats[k]; if(!st) return;
     st.byUnit = st.byUnit || {};
+    // 【诊断隔离·清洗】删除由「连通测试(写云端)」遗留在 byUnit 里的探针键
+    // （如 "__diag__|probe"、"__连通测试_xxx|..."）。这些脏键会让「听写统计/改错统计」
+    // 的课本列表出现 __diag__ / __连通测试__ 行。此处一次性清掉已持久化的脏数据，
+    // 配合 syncPull 的入口过滤，实现"存量清除 + 增量拦截"。
+    Object.keys(st.byUnit).forEach(function(uk){
+      if(isDiagKey(uk) || isDiagKey(String(st.byUnit[uk].__book||""))){
+        delete st.byUnit[uk]; cleaned++;
+      }
+    });
     var sc=0, sw=0;
     Object.keys(st.byUnit).forEach(function(uk){
       st.byUnit[uk].c = (st.byUnit[uk].c||0)|0;
@@ -10129,6 +10160,11 @@ function normalizeBuckets(){
     });
     st.c = sc; st.w = sw;
   });
+  // 错词本里的探针错词同样清除（如 "__连通测试_wrong_xxx"），避免「错词本/改错统计」残留
+  Object.keys(g.wrongBook||{}).forEach(function(w){
+    if(isDiagKey(w)){ delete g.wrongBook[w]; cleaned++; }
+  });
+  if(cleaned>0){ console.log("[诊断隔离] 已清除 "+cleaned+" 条连通测试残留数据"); }
 }
 // 自检：返回不变量检查结果；任意范围都应满足
 //   1) 剩余新词 + 月听写量 = 册总量（册级死账恒等式，核心）
@@ -10235,6 +10271,18 @@ function getStatsBucket(dateStr){
   g.stats[dateStr] = g.stats[dateStr] || {c:0,w:0,byUnit:{}};
   return g.stats[dateStr];
 }
+// 判断某个 unitKey（byUnit 的键，形如 "课本|单元"）或 wrongBook 的键是否为「连通测试」探针。
+// 连通测试(写云端) 会向 vocab_progress / wrong_words 写入诊断行，绝不应进入任何统计口径。
+// 此处为【单一判定入口】，syncPull 过滤、账本清洗、渲染防御共用，避免正则散落写错（历史坑：
+// /__连通测试__/ 带尾随双下划线，实际匹配不到 "__连通测试_wrong_" 这种单下划线形式）。
+function isDiagKey(k){
+  var s = String(k||"");
+  return s === "__diag__"
+      || s.indexOf("__diag__") === 0
+      || s.indexOf("__连通测试_") === 0
+      || /^__diag__|^__连通测试_/.test(s);
+}
+
 // 判断 g.stats 的键是否为合法日期键（YYYY-MM-DD）
 // 用于过滤 _last_sync 以及旧版同步写入的 "课本|日期" 等脏键，避免统计被污染
 function isStatsDateKey(k){ return typeof k==="string" && /^\d{4}-\d{2}-\d{2}$/.test(k); }
@@ -10360,6 +10408,7 @@ function rebuildMonthlyTotals(){
     var parts = k.split("-");
     var ym = parseInt(parts[0],10)*12 + (parseInt(parts[1],10)-1);
     Object.keys(st.byUnit).forEach(function(uk){
+      if(isDiagKey(uk)) return; // 防御：跳过连通测试探针键，不进入任何册统计
       var splitAt = uk.lastIndexOf("|");
       var bk = splitAt>=0 ? uk.slice(0, splitAt) : uk;
       var cnt = (st.byUnit[uk].c||0) + (st.byUnit[uk].w||0); // 历史：正确+错误
@@ -11192,6 +11241,11 @@ function aggregateByBook(mode){
   getRangeDates(mode).forEach(function(ds){
     var st = g.stats[ds]; if(!st||!st.byUnit) return;
     Object.keys(st.byUnit).forEach(function(uKey){
+      // 【诊断隔离·渲染防线】连通测试(写云端)的探针键形如 "__diag__|probe"、
+      // "__连通测试_<时间戳>|probe"，其 book 段 = "__diag__"/"__连通测试_xxx"，
+      // 若不拦截会作为「分册」行渲染到「分册明细」表格（即页面上出现的红框条目）。
+      // 此处用单一判定入口 isDiagKey 过滤，与 syncPull / normalizeBuckets 保持一致。
+      if(isDiagKey(uKey)) return;
       var book = (uKey.split("|")[0]) || g.book;
       var val = st.byUnit[uKey] || {c:0,w:0};
       if(!map[book]) map[book] = {c:0,w:0};
@@ -11744,6 +11798,8 @@ async function syncPush(manual){
     // 2) wrong_words
     var wrongRows = [];
     Object.keys(g.wrongBook||{}).forEach(function(w){
+      // 【诊断隔离】绝不把连通测试的探针错词上传到云端（双向：拉取已过滤，推送也过滤）
+      if(/^__连通测试_|^__diag__/.test(String(w||""))){ return; }
       var wd = g.wrongBook[w];
       wrongRows.push({
         user_id:uid, word:w,
@@ -11837,8 +11893,15 @@ async function syncPull(manual){
     if(r1.data && r1.data.length>0){
       var touchedDates = {};
       r1.data.forEach(function(r){
+        // 【诊断隔离】连通测试(写云端)会向 vocab_progress 写入探针行（book="__diag__"、
+        // word 形如 "__连通测试_<时间戳>" / "__连通测试_wrong_<时间戳>"），此类数据纯属诊断用途，
+        // 绝不能进入听写统计。此处一律丢弃，保证「今日总量/今日正确率/月听写量」等口径不被污染。
+        var _diagWord = String(r.word||"");
+        if(/^__连通测试_|^__diag__/.test(_diagWord) || String(r.book||"")==="__diag__"){
+          return;
+        }
         // 解析 word 列：新版形如 "课本|单元|日期"，旧版形如 "课本|单元"
-        var wParts = String(r.word||"").split("|");
+        var wParts = _diagWord.split("|");
         var dateKey = "";
         if(wParts.length>=3 && isStatsDateKey(wParts[wParts.length-1])){
           dateKey = wParts.pop();
@@ -11870,6 +11933,9 @@ async function syncPull(manual){
     );
     if(r2.data && r2.data.length>0){
       r2.data.forEach(function(r){
+        // 【诊断隔离】连通测试的探针错词（word 形如 "__连通测试_wrong_<时间戳>"）不进错词本，
+        // 避免「改错统计 / 错词本」里出现诊断垃圾条目
+        if(/^__连通测试_|^__diag__/.test(String(r.word||""))){ return; }
         if(!g.wrongBook[r.word]){ g.wrongBook[r.word]={count:0,fixed:false,updated:Date.now(),lastInput:"",meaning:"",phonetic:"",pos:""}; }
         if(r.wrong_count>g.wrongBook[r.word].count){ g.wrongBook[r.word].count=r.wrong_count; g.wrongBook[r.word].fixed=!!r.fixed; g.wrongBook[r.word].updated=Date.now(); if(r.last_input) g.wrongBook[r.word].lastInput=r.last_input; if(r.meaning) g.wrongBook[r.word].meaning=r.meaning; if(r.phonetic) g.wrongBook[r.word].phonetic=r.phonetic; if(r.pos) g.wrongBook[r.word].pos=r.pos; merged=true; }
       });
