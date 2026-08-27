@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>部署指引 · 外研版单词背诵</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f6fa; color: #2c3e50; line-height: 1.7; padding: 16px; }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  header { text-align: center; padding: 24px 16px; background: linear-gradient(135deg,#4a6cf7,#6a5acd);
+    color: #fff; border-radius: 16px; margin-bottom: 20px; }
+  header h1 { font-size: 22px; margin-bottom: 8px; }
+  header p { opacity: .9; font-size: 14px; }
+  .goal { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 20px;
+    border-left: 4px solid #4a6cf7; font-size: 14px; }
+  .step { background: #fff; border-radius: 12px; padding: 18px; margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+  .step h2 { font-size: 17px; color: #4a6cf7; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .num { background: #4a6cf7; color: #fff; width: 26px; height: 26px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+  .op { background: #f0f3ff; border-radius: 8px; padding: 12px; margin: 8px 0; font-size: 14px; }
+  .op b { color: #d63031; }
+  .ok { color: #00a884; font-weight: 600; margin-top: 8px; }
+  .warn { background: #fff8e1; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 8px; }
+  .warn b { color: #e67e22; }
+  code { background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+  footer { text-align: center; font-size: 12px; color: #888; margin-top: 20px; }
+  a { color: #4a6cf7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🚀 部署指引（只需 3 步）</h1>
+    <p>全程网页操作 · 零命令行 · 约 5 分钟上线</p>
+  </header>
+
+  <div class="goal">
+    <b>目标：</b>把 <code>index.html</code> 变成能访问的网站
+    <code>https://你的用户名.github.io/</code>。<br>
+    你的 <code>index.html</code> 是<b>预构建单文件</b>，无需构建，用最简单的方式即可上线。
+  </div>
+
+  <!-- 步骤 1 -->
+  <div class="step">
+    <h2><span class="num">1</span>清空仓库 + 上传 3 个文件</h2>
+    <div class="op">
+      📍 <b>操作：</b>浏览器打开你的仓库页面 → 删除里面<b>所有旧文件</b>（点每个文件右上角垃圾桶）→
+      点 <b>Add file → Upload files</b> → 把本包的
+      <code>index.html</code>、<code>guide.html</code>、<code>README.md</code> 拖进去 →
+      <b>Commit changes</b>。
+    </div>
+    <div class="ok">✅ 成功标志：仓库里只剩这 3 个文件（+ 隐藏的 .nojekyll）</div>
+    <div class="warn">⚠️ 找不到删除按钮？可去 Settings → 最底部 <b>Delete this repository</b> 删库重建（同名）。</div>
+  </div>
+
+  <!-- 步骤 2 -->
+  <div class="step">
+    <h2><span class="num">2</span>开启 Pages（一次性）</h2>
+    <div class="op">
+      📍 <b>操作：</b>仓库 → <b>Settings → Pages</b>（左侧菜单）→<br>
+      &nbsp;&nbsp;• <b>Source</b> 选 <code><b>Deploy from a branch</b></code>（⚠️ 不是 GitHub Actions）<br>
+      &nbsp;&nbsp;• <b>Branch</b> 选 <code><b>main</b></code><br>
+      &nbsp;&nbsp;• <b>文件夹</b> 选 <code><b>/(root)</b></code><br>
+      &nbsp;&nbsp;→ 点 <b>Save</b>。
+    </div>
+    <div class="ok">✅ 成功标志：页面提示 "Your site is published at https://xxx.github.io/"</div>
+    <div class="warn">⚠️ 手机点不到？浏览器菜单 → "桌面版网站"，变电脑布局更好点。</div>
+  </div>
+
+  <!-- 步骤 3 -->
+  <div class="step">
+    <h2><span class="num">3</span>验证上线</h2>
+    <div class="op">
+      📍 <b>操作：</b>等约 30 秒，浏览器打开
+      <code>https://你的用户名.github.io/</code>。
+    </div>
+    <div class="ok">✅ 成功标志：显示「必修一·全部 · 剩余 409 / 已掌握 103」等统计 = 上线成功 🎉</div>
+    <div class="warn">⚠️ 若还是旧界面 → 地址栏<b>重输一遍网址</b>（硬刷新），或等 1-2 分钟再试。</div>
+  </div>
+
+  <div class="step">
+    <h2><span class="num">★</span>以后如何更新数据？</h2>
+    <div class="op">
+      只改 <code>index.html</code> → 回到仓库 <b>Upload files</b> <b>覆盖同名文件</b> →
+      提交 → 约 30 秒自动上线。<br>
+      全程不用命令行，和这次一模一样。
+    </div>
+  </div>
+
+  <footer>
+    外研版高中英语单词背诵 · 部署指引<br>
+    遇到问题：检查仓库文件是否齐全、Pages 源是否为 "Deploy from a branch"
+  </footer>
+</div>
+</body>
+</html>
