@@ -498,7 +498,9 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
             <button class="btn btn-blue" id="btnPush">立即上传</button>
             <button class="btn btn-blue" id="btnPull">立即下载</button>
             <button class="btn btn-orange" id="btnDiag" style="background:#f59e0b;color:#fff">🔍 诊断登录</button>
+            <button class="btn btn-purple" id="btnConnTest" style="background:#7c3aed;color:#fff">🔬 连通测试(写云端)</button>
           </div>
+          <div id="connTestResult" style="display:none;margin-top:10px;padding:10px 12px;background:#0f172a;color:#e2e8f0;border-radius:8px;font-family:monospace,Consolas;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all"></div>
 
       <!-- 同步后端选择器：Supabase / GitHub / 双写并存（并存且不冲突的核心开关） -->
       <div class="backend-sel" style="margin:10px 0;padding:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px">
@@ -513,6 +515,26 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
           <input type="radio" name="syncBackend" value="dual"> 双写并存（Supabase 实时 + GitHub 归档备份）
         </label>
         <div id="backendHint" style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.5"></div>
+      </div>
+
+      <!-- 自动同步间隔：可配置的上传/下载周期 + 登录后自动上传开关 -->
+      <div class="interval-sel" style="margin:10px 0;padding:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px">
+        <div style="font-size:13px;font-weight:600;color:#1e3a5f;margin-bottom:6px">⏱️ 自动同步间隔</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-size:13px;margin-bottom:6px">
+          <label style="display:flex;align-items:center;gap:4px">上传间隔(秒)
+            <input type="number" id="autoPushInterval" min="5" max="3600" step="1" value="30" style="width:70px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:5px">
+          </label>
+          <label style="display:flex;align-items:center;gap:4px">下载间隔(秒)
+            <input type="number" id="autoPullInterval" min="5" max="3600" step="1" value="15" style="width:70px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:5px">
+          </label>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px;cursor:pointer">
+          <input type="checkbox" id="autoUploadOnLogin" checked> 登录后自动上传一次（本地→云端）
+        </label>
+        <div style="font-size:11px;color:#64748b;line-height:1.5;margin-bottom:6px">
+          页面打开自动下载、登录后自动上传，二者配合即"一处背、处处同步"。Realtime 优先，间隔仅作兜底轮询。
+        </div>
+        <button class="btn btn-green" id="btnSaveInterval" style="padding:4px 12px;font-size:12px">保存间隔</button>
       </div>
 
       <div id="authUI" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px"></div>
@@ -10040,7 +10062,14 @@ var g = {
   ghRepo:   (function(){ try{return localStorage.getItem("vocab_gh_repo")||"";}catch(e){return "";} })(),
   ghBranch: (function(){ try{return localStorage.getItem("vocab_gh_branch")||"main";}catch(e){return "main";} })(),
   ghToken:  (function(){ try{return localStorage.getItem("vocab_gh_token")||"";}catch(e){return "";} })(),
-  ghPath:   (function(){ try{return localStorage.getItem("vocab_gh_path")||"data/vocab.json";}catch(e){return "data/vocab.json";} })()
+  ghPath:   (function(){ try{return localStorage.getItem("vocab_gh_path")||"data/vocab.json";}catch(e){return "data/vocab.json";} })(),
+  // —— 自动同步间隔（秒），可于同步设置面板调整并持久化 ——
+  // 上传：每隔 autoPushInterval 秒把本地改动推到云端；下载：每隔 autoPullInterval 秒拉取云端最新
+  // 说明：下载间隔须 ≤ 上传间隔，保证先取到远端再上传，避免冲突
+  autoPushInterval: (function(){ var v=parseInt(localStorage.getItem("vocab_auto_push_interval")); return (v>=5)?v:30; })(),
+  autoPullInterval: (function(){ var v=parseInt(localStorage.getItem("vocab_auto_pull_interval")); return (v>=5)?v:15; })(),
+  // 登录/注册/会话恢复成功后，是否立即把本地数据上传一次（配合"打开自动下载"形成双向闭环）
+  autoUploadOnLogin: (function(){ var s=localStorage.getItem("vocab_auto_upload_login"); return s===null?true:(s==="1"); })()
 };
 // stats 结构: stats[date] = { c:总数, w:总数, byUnit: { "book|unit": {c,w} } }
 function statsKey(bk,un){ return bk+"|"+un; }
@@ -10640,6 +10669,29 @@ function init(){
   document.getElementById("btnPull").onclick = function(){ dispatchPull(true); };
   var btnDiag = document.getElementById("btnDiag");
   if(btnDiag) btnDiag.onclick = diagAuth;
+  var btnConn = document.getElementById("btnConnTest");
+  if(btnConn) btnConn.onclick = diagConnection;
+
+  // ---- 自动同步间隔：加载已保存值 + 保存按钮 ----
+  var elPushIv = document.getElementById("autoPushInterval");
+  var elPullIv = document.getElementById("autoPullInterval");
+  var elAutoUp = document.getElementById("autoUploadOnLogin");
+  if(elPushIv) elPushIv.value = g.autoPushInterval || 30;
+  if(elPullIv) elPullIv.value = g.autoPullInterval || 15;
+  if(elAutoUp) elAutoUp.checked = !!g.autoUploadOnLogin;
+  var btnSaveInterval = document.getElementById("btnSaveInterval");
+  if(btnSaveInterval) btnSaveInterval.onclick = saveIntervalConfig;
+
+  // 页面打开自动下载：启动拉取一次（Realtime 连接前的兜底，保证首屏即与云端一致）
+  // —— 此行已由下方 setTimeout(dispatchPull) 承担，无需重复
+  // 登录后自动上传：由 doLogin / doRegister / tryRestoreSession 在成功后调用 afterLoginPush()
+  function afterLoginPush(){
+    if(!g.autoUploadOnLogin) return;       // 开关关闭则不自动上传
+    if(!getUserId()) return;                // 未登录不动作
+    try{ dispatchPush(true); }catch(e){ console.error("登录后自动上传失败", e); }
+  }
+  // 暴露给登录流程（IIFE 外的登录函数也可调用）
+  window.afterLoginPush = afterLoginPush;
 
   document.querySelectorAll(".tab").forEach(function(t){
     t.onclick = function(){
@@ -10669,15 +10721,26 @@ function init(){
   renderAuthUI();
   setTimeout(function(){ try{ dispatchPull(false); }catch(e){ console.error("自动同步失败",e); g._syncing=false; updateSyncStatus("自动同步失败",false); } }, 3000);
   setInterval(saveState, 5000);
-  // 周期性自动同步：每 30 秒静默推送，并保证至少每 15 秒拉取一次，
+  // 周期性自动同步：按面板配置的间隔静默推送/拉取（默认上传30s、下载15s），
   // 兼顾多设备收敛速度与请求开销（仅登录后生效；Realtime 优先，此为兜底轮询）
-  setInterval(function(){
-    // 多后端调度：按 g.syncBackend 决定走 Supabase / GitHub / 双写
-    // （GitHub 归档在 dispatcher 内部节流为每 5 分钟一次，避免 commit 风暴）
-    var now = Date.now();
-    if(now - _lastAutoPull > 15000){ _lastAutoPull = now; dispatchPull(false); }
-    dispatchPush(false);
-  }, 30000);
+  // _autoSyncTimer 持有定时器 id，供 saveIntervalConfig() 动态调整后重启
+  function startAutoSyncTimer(){
+    if(g._autoSyncTimer){ clearInterval(g._autoSyncTimer); g._autoSyncTimer = null; }
+    var pushMs = Math.max(5000, (g.autoPushInterval||30) * 1000);
+    var pullMs = Math.max(5000, (g.autoPullInterval||15) * 1000);
+    // 保证下载间隔不大于上传间隔（先拉后推，避免把陈旧本地覆盖远端）
+    if(pullMs > pushMs) pullMs = pushMs;
+    g._autoSyncTimer = setInterval(function(){
+      // 多后端调度：按 g.syncBackend 决定走 Supabase / GitHub / 双写
+      // （GitHub 归档在 dispatcher 内部节流为每 5 分钟一次，避免 commit 风暴）
+      var now = Date.now();
+      if(now - _lastAutoPull > pullMs){ _lastAutoPull = now; dispatchPull(false); }
+      dispatchPush(false);
+    }, pushMs);
+  }
+  startAutoSyncTimer();
+  // 暴露给全局（saveIntervalConfig 需动态重启定时器）
+  window.startAutoSyncTimer = startAutoSyncTimer;
   window.addEventListener("beforeunload", function(){ saveState(); dispatchPush(false); });
   // pagehide 在移动端/SPA 切换时比 beforeunload 更可靠，尽力把最新数据上传
   window.addEventListener("pagehide", function(){ saveState(); dispatchPush(false); });
@@ -11420,6 +11483,101 @@ function diagAuth(){
   alert("【登录诊断报告】\n\n"+lines.join("\n")+"\n\n提示：出现 ❌ 的项即为原因，按提示处理后点「保存配置」刷新即可。");
 }
 
+// 🔬 连通测试（写云端）：真正向三张表各执行一次 upsert，把原始结果明文显示在页面上，
+// 无需打开开发者工具 Console。用于定位"上传成功但表空"——区分 未登录 / 无数据 / RLS 42501 / 表名404 / 网络。
+async function diagConnection(){
+  var box = document.getElementById("connTestResult");
+  var out = [];
+  var push = function(line){ out.push(line); if(box){ box.textContent = out.join("\n"); box.scrollTop = box.scrollHeight; } };
+  if(box){ box.style.display="block"; box.textContent=""; }
+  push("⏳ 正在测试写入云端，请稍候...\n");
+
+  // 0) 前置：初始化客户端 + 取 uid
+  initSupa && initSupa();
+  var uid = getUserId();
+  var url = localStorage.getItem("supa_url");
+  var key = localStorage.getItem("supa_key");
+
+  if(!url||!key){ push("❌1 未配置：请先填写 Supabase URL / Anon Key 并「保存配置」"); return finish(); }
+  if(!g.supa){ push("❌2 客户端未初始化：URL/Key 可能有误，或网络不通"); return finish(); }
+  if(!uid){ push("❌3 未登录(uid=null)：请用邮箱注册并登录（若卡在验证邮件，去 Supabase 关闭 Confirm email）"); return finish(); }
+
+  // 本地有多少数据可被上传
+  var st = (g.stats||{});
+  var dayCount = Object.keys(st).filter(isStatsDateKey).length;
+  var wrongCount = Object.keys(g.wrongBook||{}).length;
+  push("✅ 已登录  uid="+uid.substring(0,8)+"...");
+  push("   本地数据: stats日期 "+dayCount+" 天 / 错词 "+wrongCount+" 条\n");
+
+  // 构造一个带时间戳的探针行，避免与真实数据冲突
+  var stamp = Date.now();
+  var probe = { user_id:uid, book:"__diag__", unit:"probe", word:"__连通测试_"+stamp,
+                correct_count:1, wrong_count:0, last_practiced: new Date().toISOString() };
+  var probeWrong = { user_id:uid, word:"__连通测试_wrong_"+stamp, meaning:"探针", phonetic:"",
+                     pos:"", last_input:"", wrong_count:1, fixed:false };
+  var today = new Date().toISOString().slice(0,10);
+  var probeSession = { user_id:uid, date:today, correct_count:0, wrong_count:0, words_practiced:0,
+        mastered_words:"{}", session_correct:0, session_wrong:0, session_updated_at:stamp, data_version:0 };
+
+  var results = {};
+  // 逐个表写入，捕获每一种错误（42501 / 404 / network 表现完全不同）
+  results.vocab_progress = await safeUpsert("vocab_progress", probe, "user_id,word");
+  results.wrong_words   = await safeUpsert("wrong_words",   probeWrong, "user_id,word");
+  results.study_sessions= await safeUpsert("study_sessions",probeSession,"user_id,date");
+
+  push("\n【写入结果（原始返回）】");
+  Object.keys(results).forEach(function(tbl){
+    var r = results[tbl];
+    if(r.ok){ push("✅ "+tbl+": 写入成功"); }
+    else { push("❌ "+tbl+": "+r.summary); }
+  });
+
+  // 结论：按错误码归类，直接告诉用户该怎么办
+  push("\n【结论】");
+  var anyRls = Object.values(results).some(function(r){ return r.code==="42501"; });
+  var any404 = Object.values(results).some(function(r){ return /relation.*not found|404/i.test(r.summary||""); });
+  if(anyRls){
+    push("→ RLS 策略未放行写入(42501)。请在 Supabase SQL Editor 执行：");
+    push("  alter table public.vocab_progress enable row level security;");
+    push("  create policy p on public.vocab_progress for all to authenticated");
+    push("    using (auth.uid()::text=user_id) with check(auth.uid()::text=user_id);");
+    push("  （wrong_words / study_sessions 同理，详见 migrations.sql）");
+  } else if(any404){
+    push("→ 表不存在(404)：表名与代码不符。代码用的是 vocab_progress / wrong_words / study_sessions，");
+    push("  请确认 Supabase 中表名完全一致（区分大小写），或跑 migrations.sql 重建。");
+  } else if(Object.values(results).every(function(r){ return r.ok; })){
+    push("→ 全部写入成功 ✅ 现在去 Table editor 刷新，三张表应有 __连通测试__ 探针行。");
+    push("  若仍有业务数据为空，点「立即上传」即可把 "+dayCount+" 天/"+wrongCount+" 条错词正式推上去。");
+  } else {
+    push("→ 部分失败，请把上方红色错误原文发给我定位。");
+  }
+  finish();
+
+  function finish(){
+    var text = out.join("\n");
+    // 同时弹窗，方便手机上一眼看到结论（不依赖页面滚动）
+    setTimeout(function(){ alert("【连通测试报告】\n\n"+text); }, 100);
+  }
+}
+
+// 安全地执行一次 upsert，把 Supabase 返回的错误归一化为 {ok, code, summary}
+async function safeUpsert(table, row, conflict){
+  try{
+    var p = g.supa.from(table).upsert([row], { onConflict:conflict, ignoreDuplicates:false });
+    var r = await syncWithTimeout(p, 20000);
+    if(r && r.error){ return { ok:false, code: r.error.code||"", summary: errSummary(r.error) }; }
+    return { ok:true };
+  }catch(e){ return { ok:false, code:(e&&e.code)||"", summary: errSummary(e) }; }
+}
+function errSummary(e){
+  if(!e) return "未知错误";
+  var m = e.message||String(e);
+  var code = e.code?" ["+e.code+"]":"";
+  var hint = e.hint?" | hint:"+e.hint:"";
+  var details = e.details?" | "+e.details:"";
+  return (m+code+hint+details).slice(0,260);
+}
+
 async function doRegister(){
   var email = document.getElementById("authEmail").value.trim();
   var pwd = document.getElementById("authPwd").value;
@@ -11436,6 +11594,7 @@ async function doRegister(){
       setSession(data.session); setUserId(data.user.id);
       toast("注册并登录成功 ✅"); renderAuthUI(); updateSyncStatus("已登录",true);
       dispatchPull(true);
+      window.afterLoginPush && window.afterLoginPush(); // 登录后自动上传一次
     }
   }catch(e){ toast("注册异常："+e.message); }
 }
@@ -11454,6 +11613,7 @@ async function doLogin(){
       toast("登录成功 ✅"); renderAuthUI(); updateSyncStatus("已登录",true);
       // 登录后自动拉取云端数据（按当前后端模式分发）
       dispatchPull(true);
+      window.afterLoginPush && window.afterLoginPush(); // 登录后自动上传一次
     }
   }catch(e){ toast("登录异常："+e.message); }
 }
@@ -11469,6 +11629,7 @@ async function tryRestoreSession(){
     if(error || !data.session){ setSession(null); setUserId(null); return false; }
     setSession(data.session); setUserId(data.user.id);
     renderAuthUI(); updateSyncStatus("已登录(自动恢复)",true);
+    window.afterLoginPush && window.afterLoginPush(); // 会话恢复后自动上传一次
     return true;
   }catch(e){ return false; }
 }
@@ -11550,6 +11711,7 @@ async function syncPush(manual){
   if(!g.supa){ if(manual) toast("初始化失败"); return; }
   g._syncing = true;
   updateSyncStatus("上传中...",null);
+  var errCount = 0; // 统计被拒绝/失败的表数，避免"假成功"
   try{
     // 1) vocab_progress：把 g.stats 按「日期 × 课本|单元」展开上传
     // g.stats 结构：stats[日期] = { c, w, byUnit: { "课本|单元": {c,w} } }
@@ -11577,7 +11739,7 @@ async function syncPush(manual){
         g.supa.from('vocab_progress').upsert(progressRows, { onConflict:'user_id,word', ignoreDuplicates:false }),
         20000
       );
-      if(r1.error) console.error("progress 上传错误",r1.error);
+      if(r1.error){ console.error("progress 上传错误",r1.error); errCount++; g._lastPushError = r1.error; }
     }
     // 2) wrong_words
     var wrongRows = [];
@@ -11595,7 +11757,7 @@ async function syncPush(manual){
         g.supa.from('wrong_words').upsert(wrongRows, { onConflict:'user_id,word', ignoreDuplicates:false }),
         20000
       );
-      if(r2.error) console.error("wrong 上传错误",r2.error);
+      if(r2.error){ console.error("wrong 上传错误",r2.error); errCount++; g._lastPushError = r2.error; }
     }
     // 3) study_sessions（按日期）
     var today = new Date().toISOString().slice(0,10);
@@ -11628,8 +11790,20 @@ async function syncPush(manual){
       detectSessionMigrationNeed(sessErr);
     }
 
-    if(manual) toast("上传成功 ✅（进度"+progressRows.length+"条 / 错词"+wrongRows.length+"条）");
-    updateSyncStatus("已同步 "+new Date().toLocaleTimeString(),true);
+    if(manual){
+      if(errCount>0){
+        var summary = errSummary(g._lastPushError)||"未知错误";
+        toast("⚠️ 上传完成，但 "+errCount+" 张表写入失败（"+summary+"）— 点「🔬 连通测试」查看详情");
+        updateSyncStatus("部分失败",false);
+      } else {
+        toast("上传成功 ✅（进度"+progressRows.length+"条 / 错词"+wrongRows.length+"条）");
+        updateSyncStatus("已同步 "+new Date().toLocaleTimeString(),true);
+      }
+    } else if(errCount>0){
+      updateSyncStatus("部分失败",false);
+    } else {
+      updateSyncStatus("已同步 "+new Date().toLocaleTimeString(),true);
+    }
   }catch(e){
     console.error("上传异常",e);
     var msg = String((e&&e.message)||e||"");
@@ -11775,6 +11949,28 @@ async function syncPull(manual){
 }
 
 // --- 配置保存 / 连接测试 ---
+// 保存自动同步间隔配置：写入 localStorage + g，并重启周期定时器使其立即生效
+function saveIntervalConfig(){
+  var p = document.getElementById("autoPushInterval");
+  var q = document.getElementById("autoPullInterval");
+  var a = document.getElementById("autoUploadOnLogin");
+  var pv = parseInt((p&&p.value)||"30");
+  var qv = parseInt((q&&q.value)||"15");
+  if(isNaN(pv)||pv<5){ toast("上传间隔最少 5 秒"); if(p)p.focus(); return; }
+  if(isNaN(qv)||qv<5){ toast("下载间隔最少 5 秒"); if(q)q.focus(); return; }
+  if(qv > pv){ toast("下载间隔不能大于上传间隔（先拉后推）"); if(q)q.focus(); return; }
+  g.autoPushInterval = pv; g.autoPullInterval = qv;
+  g.autoUploadOnLogin = !!(a && a.checked);
+  try{
+    localStorage.setItem("vocab_auto_push_interval", String(pv));
+    localStorage.setItem("vocab_auto_pull_interval", String(qv));
+    localStorage.setItem("vocab_auto_upload_login", g.autoUploadOnLogin?"1":"0");
+  }catch(e){}
+  // 重启周期定时器，使新间隔立即生效（无需刷新页面）
+  if(typeof startAutoSyncTimer === "function") startAutoSyncTimer();
+  toast("间隔已保存：每 "+pv+" 秒上传 / 每 "+qv+" 秒下载 ✅");
+}
+
 function saveSupaConfig(){
   g.supaUrl = document.getElementById("supaUrl").value.trim();
   g.supaKey = document.getElementById("supaKey").value.trim();
@@ -12798,9 +12994,10 @@ document.addEventListener('visibilitychange', function(){
   if(document.visibilityState === 'visible'){
     g._syncing = false; // 从后台回来强制解除锁定
     if(g.supa) { try{ g.supa.auth.getSession(); }catch(e){} }
-    // 切回前台自动拉取云端最新数据（按后端模式分发，15秒内不重复）
+    // 切回前台自动拉取云端最新数据（按后端模式分发，遵循配置的下载间隔，避免频繁请求）
     var now = Date.now();
-    if(now - _lastAutoPull > 15000){
+    var pullMs = Math.max(5000, (g.autoPullInterval||15) * 1000);
+    if(now - _lastAutoPull > pullMs){
       _lastAutoPull = now;
       dispatchPull(false);
     }
