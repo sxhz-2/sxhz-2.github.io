@@ -12308,8 +12308,12 @@ async function dispatchPush(manual) {
 async function dispatchPull(manual) {
   var b = (g.syncBackend || "supabase");
   if (b === "supabase" || b === "dual") {
-    // dual 模式：Supabase 是唯一实时真相源；GitHub 只归档，按需通过「从 GitHub 恢复归档」拉取
+    // dual 模式：Supabase 是唯一实时真相源；GitHub 归档按需自动收敛（只读合并，永不对写）
     try { await syncPull(manual); } catch (e) {}
+    // 缺口1：双写并存时，每次 pull 同步从 GitHub 归档拉取并合并，实现多渠道自动恢复
+    if (b === "dual" && GitHubProvider && GitHubProvider.isConfigured()) {
+      try { await GitHubProvider.pull(false); } catch (e) {}
+    }
   } else if (b === "github") {
     try { await GitHubProvider.pull(manual); } catch (e) {}
   }
@@ -12376,6 +12380,12 @@ function setupSyncBackend() {
     if (acts && g.ghRepo) acts.href = "https://github.com/" + g.ghRepo + "/actions";
     setGhStatus("配置已保存", "ok");
     toast("GitHub 配置已保存 ✅");
+    // 缺口3：保存即生效 —— 配置就绪后自动连通测试 + 首次归档上传，无需手动点
+    if (GitHubProvider && GitHubProvider.isConfigured()) {
+      GitHubProvider.test().then(function () {
+        try { GitHubProvider.push(true); } catch (e) {}
+      }).catch(function () {});
+    }
   };
   var ghSyncEl = document.getElementById("ghSync");
   if (ghSyncEl) ghSyncEl.onclick = function () { GitHubProvider.push(true); };
