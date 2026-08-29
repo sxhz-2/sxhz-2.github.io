@@ -14,33 +14,51 @@
   运行：浏览器直接打开即可；云端同步依赖 Supabase（CDN 引入）
 
 【二、当前版本】
-  version : 2026-08-28 · v5（分册明细渲染隔离 · 红框条目彻底消失）
+  version : 2026-08-29 · v18（根治「账本曾漂移」黄字：不变量4 承认跨月多月份结构）
+  上一基线：v15（今日总量 = 今日·全册之和，不分册；内嵌 v16/v17 校验口径注释，但 file 头未升级）
+  说明：本文件 = 用户真实运行文件（手机端）的本地副本。此前 v16/v17 交付文件未被部署，
+        黄字根因（不变量4 误判跨月历史桶为漂移）始终未在真文件上修复，本次一次性到位。
   状态    ：可用于日常背诵 + 可作为新对话的接续基线
+  定稿原则：以「指令原文 + 截图反推」为唯一依据，此后不再横跳；恒等式编译期强制、漂移自动修平。
 
-【二之四、v5 新增（修复"分册明细仍显示 __diag__ 条目"）】
-  现象：页面「听写统计 → 分册明细」表格出现 __diag__ / __连通测试_xxx 行（正确数 0/2/1）。
-  根因：aggregateByBook() 遍历 stats.byUnit 时用 uKey.split("|")[0] 作册名，
-    探针键 "__diag__|probe"、"__连通测试_<ts>|probe" 的册名段即 "__diag__"/"__连通测试_xxx"，
-    直接进入分册表格——这是渲染侧入口，syncPull/normalizeBuckets 的过滤管不到此处。
-  修复：aggregateByBook 循环入口加 isDiagKey(uKey) return（与 syncPull/清洗共用单一判定入口），
-    形成「syncPull 拦截 → normalizeBuckets 存量清除 → aggregateByBook 渲染防线」三层隔离。
-  注：连通测试按钮位置未变，仍在「⚙️ 设置 → 同步设置」；本册正确数/月听写量等口径不受影响。
+【二之八、v15 新增（今日总量 = 今日全册之和，不分册）】
+  变更：今日总量 / 今日正确率 由「所选册」改为「今日·全册之和（不分册）」，
+        与「听写统计·日 顶部总量」完全同源(= getAllBooksStats)，不再分册。
+  改动点：renderStats 今日统计取值 getScopedStats(g.book,g.unit) → getAllBooksStats（今日桶）。
+  依据：用户定稿口径「今日总量为今日所有听写量，不分册」。
+  守恒：今日正确率(= 今日全册正确率) 与 今日总量 共用同一 td，分子分母同源，语义自洽；
+        _todayWritten 守护 / 今日未听写强制归0 逻辑保持不变。
 
-【二之三、v4 新增（连通测试彻底留在设置里，不污染听写统计）】
-  根因：「🔬 连通测试(写云端)」会向云端三张表写入探针行（vocab_progress.book="__diag__"、
-  word="__连通测试_<时间戳>" / wrong_words.word="__连通测试_wrong_<时间戳>"），而 syncPull 的合并逻辑
-  未过滤这些诊断行，导致探针数据被拉回并合进 g.stats / g.wrongBook，
-  最终显示在「听写统计 / 改错统计 / 错词本」——即"连通测试跑完后今日总量/正确率/错词本被污染"。
-  按钮本身已在「⚙️ 设置 → 同步设置」内（符合"保留在设置里"），本次只堵数据回流路径。
-  修复如下：
-  1. syncPull·vocab_progress：循环入口过滤 /^__连通测试_|^__diag__/ 及 book==="__diag__"，
-     探针行直接 return，不进入任何日期桶 → 今日总量/今日正确率/月听写量不再被污染
-  2. syncPull·wrong_words：同上过滤，探针错词不进 g.wrongBook → 改错统计/错词本干净
-  3. syncPush·wrong_words：上传端同步过滤，已混入本地的探针不再被推上云端、避免跨设备回灌
-  4. 正则采用前缀匹配 /^__连通测试_/（注意：探针形如 "__连通测试_wrong_"，
-     "__连通测试__" 这种带尾随双下划线的写法是匹配不到的——已实测验证并修正）
-  5. 连通测试按钮（#btnTest / #btnConnTest）位置不变，仍在「同步设置」面板内，
-     不在听写统计卡片中
+【二之七、v14 新增（落地交接快照 待办1+2）】
+  1.（待办1）reconcileSession 改为「桶内容 + _todayWritten」双锚点清0：
+     今日桶存在 且 今日未真实作答 → 无条件物理删除今日桶，
+     根治"今日未听写仍显示错误1"（含 syncPull 脏写 / 旧版残留场景）。
+     双锚点：① g.stats[today].byUnit 有内容 ② g._todayWritten===today；
+     仅 ①&&② 同时为真才保留今日桶，其余一律清0。
+  2.（待办2）确认「听写统计总量=不分册」配套：updatePeriodStats / renderChart 已统一用
+     getAllBooksStats（全册之和），aggregateByBook 按册分组——二者对同一 byUnit 求和，
+     数学上「顶部总量 ≡ Σ分册明细」恒成立；并在 renderChart 加运行时 console 断言自检，
+     失配时报警（不阻断渲染），防止未来口径回退。
+  3. 待办1 为待办2 的前提：今日桶清0 干净后，getAllBooksStats 聚合才不被残留污染，
+     恒等式自检方可信赖（执行顺序：先 T1 后 T2，已满足）。
+
+【二之六、v13 新增（三大问题根治，对齐用户定稿口径）】
+  根因：① updatePeriodFix 用 Object.values(g.wrongBook) 全量无册过滤 → 错词本(当前册=47)≠改错统计(全册=130)；
+        ② 兜底 if(err===0&&wc.length>0){err=wc.length} 把三模式窗口统计强制成全量 → 日=周=月；
+        ③ renderChart day 分支保留多 item 横柱骨架 → "第二个柱状图"反复横跳去不掉。
+  整改：
+  1. 新增 getWrongInScope(mode) 单一事实源 = 当前册(g.book) ∩ 时间窗口 ∩ 排除连通测试探针；
+     错词本 ≡ 改错统计（同一作用域），47=47，不再 47 vs 130。
+  2. updatePeriodFix 改用 getWrongInScope；删除兜底行；日/周/月窗口真正分化（日≠周≠月）。
+     窗口 = getRangeStartTs：日=今日0点 / 周=本周一0点 / 月=本月1号0点（均北京时间）。
+  3. renderChart day 分支结构性去柱：仅渲染「总计一条横条 + 时间/正确/错误/总计 4列表格」；
+     week/month 保留竖向柱状图（chart-day）。从结构上杜绝"第二个柱状图"再现。
+  4. 用户定稿口径（锁定，不再变更）：
+     错词本 = 当前册·未改正错词
+     改错统计·日 = 今日(新增/改正)错词
+     改错统计·周 = 本周(周一~今日)
+     改错统计·月 = 本月(1号~今日)
+     约束：① 日 ≠ 周 ≠ 月  ② 错词本 ≡ 改错统计（同一作用域 = 当前册）
 
 【二之一、v2 新增（多设备同步防丢数据）】
   1. 单调递增 dataVersion + updatedAt：每次 saveState 版本+1，随 localStorage / 导出 JSON 持久化
@@ -64,6 +82,60 @@
   4. 收敛提速：轮询周期 60s→30s，切前台/visibilitychange 节流 30s→15s
   5. 迁移 SQL 独立为 supabase/migrations.sql（含 RLS policy + Realtime 副本标识与 publication）
   配套：supabase/migrations.sql（一次性在 SQL Editor 执行即可）
+
+【二之三、v4 新增（统计规则重构，对齐定稿总则）】
+  总则：时间标准 = 北京时间(UTC+8)；日/周/月 = 自然日/自然周/自然月。
+  改动：
+  1. 北京时间统一：todayStr / todayYMD / currentMonthPrefix / currentYM / getRangeDates
+     (周一起点、本月1号) / updatePeriodFix(今日、本月边界) 全部锁定 UTC+8，
+     与 g.stats 日期键同源，消除零点漂移。
+  2. 学习统计：
+     · 核心恒等式（v9 定锚，不再变更）：
+        剩余新词 + 当月听写量 ≡ 册总量(cap)
+        当月听写量 = 册总量 − 剩余新词 = 该册「去重已听写单词数」(heardSet.size)
+        剩余新词   = 册总量 − 已听写（去重，一个单词算一次，含跳过）
+     · 单一口径 = 去重单词数；允许跨月累计；遍周期与月份无关。
+     · 遍数追踪：听完全册(record bookCompletedDate) → 次日0点 advanceBookPass()
+       passCount++、清除该册 masteredWords/wrongBook → 第二遍从总词量重启，显示"第N遍"
+  3. 听写统计：日模式改为「横向柱状图」(水平条形，长度拉满、宽窄美观)，
+     周/月保持原竖向柱状图；分册明细新增"总量"列(=对应时间分册听写总量，次日0点清0)。
+  4. 改错统计：按日/周/月统计对应时间总量，「不分册」；全部改正后记录 allFixedDate，
+     次日0点 advanceFixClear() 清空错词本重启累积；跳过计入改错。
+  5. 账本自检 verifyLedger 不变量1（v9）：恒等式 剩余 + 当月听写量 === cap，漂移自动修平；
+     monthlyTotals 改为派生缓存，唯一写入源 recomputeMonthTotal() = heardSet.size。
+
+【二之四、v5 新增（连通测试探针与主统计彻底隔离）】
+  问题：截图发现「分册明细」出现"连通测试"(正确2/错误0)，源于云端 syncPull 把
+  🔬连通测试的探针行写回本地 g.stats / g.wrongBook，污染主界面统计。
+  原则：连通测试是「⚙️ 设置 → 连通测试」的诊断工具，其探针数据只用于判断云端连通性，
+  绝不可出现在主界面的分册明细 / 错词本 / 总正确率中。
+  改动（三层防护，任一可独立生效，互为冗余）：
+  1.【源头拦截】syncPull 拉取云端 vocab_progress / wrong_words 时，对每行先判
+     isDiagnosticBook(book) || isDiagnosticBook(word)，命中即跳过，探针永不复写本地账本。
+  2.【渲染过滤】aggregateByBook（分册明细）增加双重过滤：book 级 + key 整体含"连通测试/探针"兜底；
+     renderWrong（错词本）增加 isDiagnosticBook 显式排除。
+  3.【历史清理】新增 purgeDiagnosticProbes()（幂等），init 加载数据后自动执行一次，
+     清除本地已污染的 stats.byUnit / wrongBook 探针条目并自动存档；连通测试数据一键归零。
+  判定函数：isDiagnosticBook(name) = /连通测试|__diag__|^__/.test(name)。
+
+【二之五、v6 / v7 / v8 / v9 口径收敛（当前生效版本）】
+  · v6：剩余新词 / 当月听写量改用「去重单词数」单一口径；setMT 写入封顶 = 册总量；
+    当日统计(今日总量/正确率/本次正确错误)今日未真实作答时强制归0(显示+存储双清)；
+    getRangeDates 周起点改北京时间星期，monday 显式声明避免抛错。
+  · v7：核心恒等式 剩余新词 + 当月听写量 ≡ 册总量(cap) 编译期强制、漂移自动修平；
+    当月听写量 = 总量 − 剩余新词(已听一个单词算一次，允许跨月)。
+  · v8：清册机制 = 自动。一本书听写完(剩余=0) → 记录 bookCompletedDate →
+    次日0点 advanceBookPass()：passCount++、清除该册 masteredWords/wrongBook、
+    当月听写量(monthlyTotals)归0 → 第二遍从总词量重新累计，遍周期与月份无关。
+    遍数从第1遍就显示：passLabel = "第" + (donePasses+1) + "遍"，红字紧跟「剩余新词」。
+    清0前本地归档（不上云端）：createPassArchive → localStorage vocab_pass_archive。
+  · v9（当前）：口径最终定锚，不再横跳。
+    ★ 当月听写量 / 剩余新词 统一为「去重单词数」单一口径，恒等式 剩余 + 当月 ≡ cap 恒成立。
+    ★ monthlyTotals 降为派生缓存，唯一写入源 recomputeMonthTotal() = heardSet.size；
+      checkAnswer 不再 setMT+1 累加（根除"次数 vs 去重"打架）。
+    ★ 日统计清0：reconcileSession 物理删除今日桶 + _todayWritten 守护
+      （checkAnswer / syncPull 写入端均以今日真实作答为唯一真值，根治"未清0感"）。
+    ★ 修复历史上 v6(封顶次数)/v7(恒等式)/v8(封顶) 的口径横跳，以本版为准。
 
 【三、已完成的功能清单】（不要重复实现）
   1. 核心听写：课本/单元选择、词量、开始听写、错词听写、TTS 发音、按住说话语音识别
@@ -91,17 +163,29 @@
   · saveState / exportJSON / importJSON / applySnapshotText ：持久化与导入链路
   · initSupa / setupRealtime / onRemoteChange ：Supabase 连接 + Realtime 实时同步
   · syncPush / syncPull / detectRlsError / tryRestoreSessionWithRetry ：云端同步与韧性重试
-  · getScopedStats / computeBookStats / rebuildMonthlyTotals ：统计聚合（注意「结转」逻辑，
-    highCorrect/highWrong 放在非当前册下以避免污染当前册的月听写量）
+  · getScopedStats / computeBookStats / getScopedStats / computeBookStats / recomputeMonthTotal ：统计聚合（v9 恒等式口径：
+                                                                             当月听写量 = heardSet.size = cap − remain，允许跨月，遍周期与月份无关）
+    剩余新词 = cap − heardSet.size（恒等式：剩余 + 当月 ≡ cap），跨月红字 crossN）
+  · advanceBookPass / advanceFixClear ：每日0点推进遍数 / 改错清0（幂等，renderStats 首部调用）
+  · renderStats / renderChart / updatePeriodFix ：统计渲染 / 日横·周月竖柱状图 / 改错统计(不分册)
+  · verifyLedger / runLedgerCheck ：账本自检，不变量1 = 恒等式 剩余+当月≡cap，漂移自动修平
+  · todayStr / todayYMD / currentYM ：北京时间(UTC+8)日期键，与 g.stats 写入键同源
   · EMBEDDED_SNAPSHOT ：内嵌于脚本中的存档快照常量（对应 vocab_snapshot.json 内容）
 
-【五、统计口径速查】（避免再次出现「本次15/15 vs 今日5」类倒挂）
-  · 本次正确/错误 = g.correct / g.wrong          （本轮会话瞬时计数）
-  · 今日总量       = stats[今天].byUnit 的 c+w    （持久化日期桶，按当前课本+单元）
-  · 今日正确率     = round(100 * c / (c+w))
-  · 总正确率       = Σ所有日期桶(c) / Σ(c+w)      （跨册）
-  · 月听写量       = 当月 Σ(c+w)，按自然月聚合
-  · 剩余新词/本组总数 取决于当前加载的 wordsData，快照无法凭空还原
+【五、统计口径速查】（v9，总则：北京时间 · 自然日/周/月 · 次日0点清0 · 恒等式定锚）
+  · 本次正确/错误 = g.correct / g.wrong          （本轮会话瞬时，次日0点清0，reconcileSession 保证）
+  · 本组总数     = 本次词量 = 当前队列长度
+  · 今日总量     = 今日·所选册 Σ(c+w)            （次日0点归0）
+  · 今日正确率   = round(100 * c / (c+w))        （所选册，次日0点归0）
+  · 总正确率     = 所选册累计 c / (c+w)
+  · 当月听写量   = 册总量 − 剩余新词 = 该册去重已听写单词数(heardSet.size)，允许跨月、不封顶
+  · 剩余新词     = 册总量 − 已听写（去重，一个单词算一次，含跳过），∈[0,cap]
+  · 恒等式       = 剩余新词 + 当月听写量 ≡ 册总量(cap)（v9 定锚，恒成立，见 verifyLedger）
+  · 遍数         = 听完一册计一遍；次日0点 advanceBookPass 进下一遍，标注"第N遍"
+  · 跨月         = 上月未听完+本月继续 → 红字"跨N月 · 继续听写"，听完次日清0
+  · 日柱状图     = 横向(水平条形)；周/月 = 竖向(保持)
+  · 分册明细     = 对应时间分册听写总量(含"总量"列)，次日0点清0
+  · 改错统计     = 按日/周/月总量，不分册；全部改正后次日0点清0，跳过计入改错
 
 【六、已知遗留 / 注意事项】
   · 答题队列夹具（回归测试）仅 1 词时会导致多次 checkAnswer 提前返回——属测试环境问题，非产品 bug
@@ -325,6 +409,26 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
 .tl-item-pinned:before{background:#7c3aed;border-color:#fff;box-shadow:0 0 0 1px #c4b5fd}
 /* 清除强确认 */
 .confirm-clear-box{border:1px dashed #fca5a5;background:#fef2f2;border-radius:10px;padding:12px;margin-top:8px}
+/* 遍数徽标：紧跟「剩余新词」，红字圆角，从第1遍起显示 */
+.pass-badge{color:#ef4444;font-weight:700;font-size:12px;letter-spacing:.3px;
+  border:1px solid #fca5a5;border-radius:6px;padding:1px 6px;margin-left:4px;white-space:nowrap}
+.pass-badge:empty{border:0;padding:0;margin:0}
+/* 遍数历史列表（v8，本地归档快照，不上云） */
+.pass-history-title{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#64748b;margin:10px 0 6px}
+.pass-history-title b{color:#334155}
+.pass-history-note{font-size:11px;color:#94a3b8;margin-left:6px;font-weight:400}
+.pass-history-list{max-height:240px;overflow:auto;border:1px solid #f1f5f9;border-radius:8px;padding:4px}
+.pass-history-item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #f1f5f9;font-size:12px}
+.pass-history-item:last-child{border-bottom:0}
+.pass-history-item .ph-left{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pass-history-item .ph-book{font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pass-history-item .ph-date{font-size:11px;color:#94a3b8}
+.pass-history-item .ph-right{text-align:right;white-space:nowrap;font-size:12px;color:#475569}
+.pass-history-item .ph-rate{font-weight:700}
+.pass-history-item .ph-rate.hi{color:#10b981}
+.pass-history-item .ph-rate.mid{color:#f59e0b}
+.pass-history-item .ph-rate.lo{color:#ef4444}
+.pass-history-empty{font-size:12px;color:#94a3b8;text-align:center;padding:14px 0}
 .confirm-clear-box input{padding:8px 10px;border:1px solid #fecaca;border-radius:8px;font-size:14px;width:160px;margin-right:8px}
 </style>
 
@@ -400,14 +504,14 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
     <div class="card">
       <h3>学习统计</h3>
       <div class="stats">
-        <div class="stat"><div class="v" id="sRemain">0</div><div class="l">剩余新词</div></div>
+        <div class="stat"><div class="v" id="sRemain">0</div><div class="l">剩余新词 <span id="passLabel" class="pass-badge"></span></div></div>
         <div class="stat"><div class="v" id="sTotal">0</div><div class="l">本组总数</div></div>
         <div class="stat"><div class="v" id="sCorrect">0</div><div class="l">本次正确</div></div>
         <div class="stat"><div class="v" id="sWrong">0</div><div class="l">本次错误</div></div>
         <div class="stat"><div class="v" id="sTodayTotal">0</div><div class="l">今日总量</div></div>
         <div class="stat"><div class="v" id="sTodayRate">0%</div><div class="l">今日正确率</div></div>
         <div class="stat"><div class="v" id="sTotalRate">0%</div><div class="l">总正确率</div></div>
-        <div class="stat"><div class="v" id="sMonthTotal" style="color:#3b82f6">0</div><div class="l">📅 月听写量</div></div>
+        <div class="stat"><div class="v" id="sMonthTotal" style="color:#3b82f6">0</div><div class="l">📅 当月听写量</div></div>
       </div>
       <div id="crossMonthTag" style="margin-top:6px;font-size:13px;text-align:center;"></div>
       <div id="ledgerStatus" style="margin-top:10px;font-size:13px;text-align:center;"></div>
@@ -553,9 +657,13 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
           <input type="checkbox" id="autoUploadOnLogin" checked> 登录后自动上传一次（本地→云端）
         </label>
         <div style="font-size:11px;color:#64748b;line-height:1.5;margin-bottom:6px">
-          页面打开自动下载、登录后自动上传，二者配合即"一处背、处处同步"。Realtime 优先，间隔仅作兜底轮询。
+          规则：<b>上传 ≥ 5 秒，下载 ≥ 3 秒，且下载 ≤ 上传</b>（先拉后推，避免把陈旧本地覆盖远端）。Realtime 优先，间隔仅作兜底轮询。
         </div>
-        <button class="btn btn-green" id="btnSaveInterval" style="padding:4px 12px;font-size:12px">保存间隔</button>
+        <div id="intervalHint" style="font-size:11px;line-height:1.5;margin-bottom:6px;color:#64748b"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn btn-green" id="btnSaveInterval" style="padding:4px 12px;font-size:12px">保存间隔</button>
+          <button class="btn btn-orange" id="btnResetInterval" style="padding:4px 12px;font-size:12px" title="恢复上传30秒 / 下载15秒">↺ 重置为默认</button>
+        </div>
       </div>
 
       <div id="authUI" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px"></div>
@@ -581,6 +689,12 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
       <div id="backupRestoreMsg" style="font-size:12px;margin-top:6px;min-height:16px"></div>
     </div>
   </div>
+  <!-- 遍数历史：每听完一册，清0前本地保存一份快照（不上云），供回看上一遍 -->
+  <div class="pass-history-title">
+    <span><b>遍数历史</b><span class="pass-history-note">清0前本地归档，不上云端 · 可还原</span></span>
+    <span id="passHistoryCount" style="font-size:11px;color:#94a3b8"></span>
+  </div>
+  <div id="passHistoryList" class="pass-history-list"></div>
 </div>
 </div>
 <div class="card settings-entry" id="settingsEntryCard">
@@ -865,6 +979,10 @@ function applySnapshotText(text, opts){
     if(d._sessionDate) g._sessionDate = d._sessionDate; else g._sessionDate = todayStr();
     g._sessionUpdatedAt = Date.now();
     reconcileSession();
+    // 遍数追踪（v8）：本地持久化字段恢复；passArchive 为每一遍归档快照，不上云
+    if(d.passCount && typeof d.passCount==="object") g.passCount = d.passCount;
+    if(d.bookCompletedDate && typeof d.bookCompletedDate==="object") g.bookCompletedDate = d.bookCompletedDate;
+    if(Array.isArray(d.passArchive)) g.passArchive = d.passArchive;
     var _latestIdx = (ver>=3 && Array.isArray(d.autoBackups) && d.autoBackups.length)
       ? d.autoBackups[d.autoBackups.length-1].data : null;
     var _restoredIdx = (_latestIdx && typeof _latestIdx.idx==="number") ? _latestIdx.idx : (typeof d.idx==="number" ? d.idx : 0);
@@ -10090,7 +10208,13 @@ var g = {
   autoPushInterval: (function(){ var v=parseInt(localStorage.getItem("vocab_auto_push_interval")); return (v>=5)?v:30; })(),
   autoPullInterval: (function(){ var v=parseInt(localStorage.getItem("vocab_auto_pull_interval")); return (v>=5)?v:15; })(),
   // 登录/注册/会话恢复成功后，是否立即把本地数据上传一次（配合"打开自动下载"形成双向闭环）
-  autoUploadOnLogin: (function(){ var s=localStorage.getItem("vocab_auto_upload_login"); return s===null?true:(s==="1"); })()
+  autoUploadOnLogin: (function(){ var s=localStorage.getItem("vocab_auto_upload_login"); return s===null?true:(s==="1"); })(),
+  // —— 遍数追踪（v8）——
+  // passCount[book] = 该册已完成的遍数；bookCompletedDate[book] = 最近一遍完成日（次日0点触发归0）
+  // 清0前不存云端；但本地保留每一遍的完整快照 passArchive（不上云），供「上一遍可回溯 / 还原」。
+  passCount: {},
+  bookCompletedDate: {},
+  passArchive: []
 };
 // stats 结构: stats[date] = { c:总数, w:总数, byUnit: { "book|unit": {c,w} } }
 function statsKey(bk,un){ return bk+"|"+un; }
@@ -10111,6 +10235,21 @@ function getScopedStats(bkt, book, unit){
   }
   return {c:c,w:w};
 }
+
+// 不分册统计：统计某日期桶「全部册」（不含连通测试等诊断探针册）。
+// 供「听写统计·日/周/月总量」使用——定稿规则：总量不分册。
+function getAllBooksStats(bkt){
+  var c=0, w=0;
+  if(!bkt || !bkt.byUnit) return {c:c,w:w};
+  Object.keys(bkt.byUnit).forEach(function(k){
+    var book = (k.split("|")[0]) || "";
+    if(isDiagnosticBook(book)) return;        // 过滤连通测试探针册
+    if(/连通测试|探针|__diag__/.test(k)) return;
+    c += (bkt.byUnit[k].c||0);
+    w += (bkt.byUnit[k].w||0);
+  });
+  return {c:c,w:w};
+}
 // 跨所有日期聚合当前课本/单元的累计正确/错误
 function getTotalScopedStats(book, unit){
   var c=0, w=0;
@@ -10123,12 +10262,15 @@ function getTotalScopedStats(book, unit){
 }
 // ===== 死账核心：以下三个函数是唯一允许"重算/校验"统计的入口 =====
 // 全局累计（totalCorrect/totalWrong）= 所有日期桶的 byUnit 之和（byUnit 是权威，bucket.c/w 只是冗余缓存）
+// 注：连通测试等诊断探针册（isDiagnosticBook）不计入总正确率。
 function recomputeTotals(){
   var c=0, w=0;
   Object.keys(g.stats||{}).forEach(function(k){
     if(!isStatsDateKey(k)) return;
     var st = g.stats[k]; if(!st || !st.byUnit) return;
     Object.keys(st.byUnit).forEach(function(uk){
+      var bk = (uk.split("|")[0]) || "";
+      if(isDiagnosticBook(bk)) return;          // 过滤连通测试探针
       c += (st.byUnit[uk].c||0);
       w += (st.byUnit[uk].w||0);
     });
@@ -10136,22 +10278,38 @@ function recomputeTotals(){
   g.totalCorrect = c;
   g.totalWrong = w;
 }
-// 规范化：让每个日期桶的 c/w（缓存）= byUnit 各项之和，消除历史脏数据导致的漂移
+// 一次性迁移：清除「连通测试」等诊断探针污染的正常数据。
+// 探针行只服务于「⚙️ 设置 → 连通测试」的云端连通性诊断，绝不应出现在主界面的
+// 分册明细 / 错词本 / 总正确率中。此函数幂等，可多次执行，无副作用。
+function purgeDiagnosticProbes(){
+  var removed = 0;
+  // 1) 清理 stats[date].byUnit 中的探针 key
+  Object.keys(g.stats||{}).forEach(function(k){
+    if(!isStatsDateKey(k)) return;
+    var st = g.stats[k]; if(!st||!st.byUnit) return;
+    Object.keys(st.byUnit).forEach(function(uk){
+      var bk = (uk.split("|")[0]) || "";
+      if(isDiagnosticBook(bk) || /连通测试|探针/.test(uk)){ delete st.byUnit[uk]; removed++; }
+    });
+  });
+  // 2) 清理错词本中的探针错词
+  Object.keys(g.wrongBook||{}).forEach(function(w){
+    var v = g.wrongBook[w];
+    if(isDiagnosticBook(w) || isDiagnosticBook(v&&v.book||"")){
+      delete g.wrongBook[w]; removed++;
+    }
+  });
+  if(removed > 0){
+    recomputeTotals(); rebuildMonthlyTotals();
+    try{ saveState(); }catch(e){}
+    console.info("[purgeDiagnosticProbes] 已清除 "+removed+" 条连通测试探针数据");
+  }
+}
 function normalizeBuckets(){
-  var cleaned = 0;
   Object.keys(g.stats||{}).forEach(function(k){
     if(!isStatsDateKey(k)) return;
     var st = g.stats[k]; if(!st) return;
     st.byUnit = st.byUnit || {};
-    // 【诊断隔离·清洗】删除由「连通测试(写云端)」遗留在 byUnit 里的探针键
-    // （如 "__diag__|probe"、"__连通测试_xxx|..."）。这些脏键会让「听写统计/改错统计」
-    // 的课本列表出现 __diag__ / __连通测试__ 行。此处一次性清掉已持久化的脏数据，
-    // 配合 syncPull 的入口过滤，实现"存量清除 + 增量拦截"。
-    Object.keys(st.byUnit).forEach(function(uk){
-      if(isDiagKey(uk) || isDiagKey(String(st.byUnit[uk].__book||""))){
-        delete st.byUnit[uk]; cleaned++;
-      }
-    });
     var sc=0, sw=0;
     Object.keys(st.byUnit).forEach(function(uk){
       st.byUnit[uk].c = (st.byUnit[uk].c||0)|0;
@@ -10160,11 +10318,6 @@ function normalizeBuckets(){
     });
     st.c = sc; st.w = sw;
   });
-  // 错词本里的探针错词同样清除（如 "__连通测试_wrong_xxx"），避免「错词本/改错统计」残留
-  Object.keys(g.wrongBook||{}).forEach(function(w){
-    if(isDiagKey(w)){ delete g.wrongBook[w]; cleaned++; }
-  });
-  if(cleaned>0){ console.log("[诊断隔离] 已清除 "+cleaned+" 条连通测试残留数据"); }
 }
 // 自检：返回不变量检查结果；任意范围都应满足
 //   1) 剩余新词 + 月听写量 = 册总量（册级死账恒等式，核心）
@@ -10174,11 +10327,21 @@ function normalizeBuckets(){
 function verifyLedger(scopeBook, scopeUnit){
   var issues = [];
   var bk = scopeBook||g.book;
-  // 不变量1（核心）：剩余新词 + 月听写量 = 册总量
+  // 不变量1（核心，v9 定锚）：恒等式 剩余新词 + 当月听写量 ≡ 册总量(cap)
+  // 单一口径 = 去重单词数；允许跨月、遍周期与月份无关。
   var cap = BOOK_TOTAL[bk] || 0;
   var bs = computeBookStats(bk, currentYM());
-  if(cap>0 && bs.remain + bs.monthTotal !== cap){
-    issues.push("剩余新词("+bs.remain+")+月听写量("+bs.monthTotal+")≠册总量("+cap+")");
+  var heardSet = getHeardSet(bk, scopeUnit||"__all");
+  var totalHeard = heardSet.size;
+  var expectedRemain = cap > 0 ? Math.max(0, cap - totalHeard) : 0;  // = cap − heardSet.size
+  if(cap>0 && bs.remain !== expectedRemain){
+    issues.push("剩余新词("+bs.remain+")≠册总量("+cap+")−已听写去重("+totalHeard+")");
+  }
+  if(cap>0 && (bs.remain + bs.monthTotal) !== cap){
+    issues.push("恒等式漂移：剩余("+bs.remain+") + 当月听写量("+bs.monthTotal+") ≠ 册总量("+cap+")");
+  }
+  if(cap>0 && (bs.remain < 0 || bs.remain > cap)){
+    issues.push("剩余新词("+bs.remain+")超出合法区间[0,"+cap+"]");
   }
   // 不变量2：桶 c/w == byUnit 之和
   Object.keys(g.stats||{}).forEach(function(k){
@@ -10199,24 +10362,32 @@ function verifyLedger(scopeBook, scopeUnit){
   if(g.totalCorrect!==gc) issues.push("totalCorrect("+g.totalCorrect+")≠全局byUnit和("+gc+")");
   if(g.totalWrong!==gw) issues.push("totalWrong("+g.totalWrong+")≠全局byUnit和("+gw+")");
   // 不变量4：monthlyTotals 派生缓存未漂移（无副作用地重新扫描比对）
+  // ★ v16/v18 根治：必须与 rebuildMonthlyTotals 同源 = heardSet.size（去重单词数，定稿口径），
+  //   绝不能用 c+w（次数口径）——两口径混用会导致此不变量数学上永不成立。
+  // ★ v18 关键修正：monthlyTotals[book][ym] 是【跨月多月份结构】（设计如此，"当月听写量允许跨月"），
+  //   因此不能要求"只有当月一个键"。正确判据 = 逐月比对：
+  //     · 对 g.monthlyTotals 中【每个已存在的月份桶】，当月桶须 == heardSet.size，历史桶保持原值即合法；
+  //     · 历史月份（≠ 当月）属于跨月累积快照，不算漂移，不报错；
+  //     · 当月桶 !== Math.min(heardSet.size, cap) 才报漂移。
+  //   此前 v16/v17 用"tmp 仅当月"全量 JSON 比对 → 任何有历史月份的存档必报 I4 → 黄字每次加载必现，
+  //   这才是线上黄字的【真正根因】（复现：monthlyTotals={book:{2026-07:50,2026-08:158}}）。
   var ok4 = true;
-  var tmp = {};
-  Object.keys(g.stats||{}).forEach(function(k){
-    if(!isStatsDateKey(k)) return;
-    var st = g.stats[k]; if(!st||!st.byUnit) return;
-    var parts = k.split("-"); var ym = parseInt(parts[0],10)*12 + (parseInt(parts[1],10)-1);
-    Object.keys(st.byUnit).forEach(function(uk){
-      var bkx = uk.lastIndexOf("|")>=0 ? uk.slice(0, uk.lastIndexOf("|")) : uk;
-      var cnt = (st.byUnit[uk].c||0)+(st.byUnit[uk].w||0);
-      if(cnt>0){ tmp[bkx] = tmp[bkx]||{}; tmp[bkx][ym] = (tmp[bkx][ym]||0)+cnt; }
+  var _nowYM = currentYM();
+  Object.keys(BOOK_TOTAL||{}).forEach(function(bkx){
+    if(isDiagnosticBook(bkx)) return;                 // 过滤连通测试探针册
+    var _heard = getHeardSet(bkx, "__all").size;       // 去重已听写单词数（唯一口径）
+    var _cap = BOOK_TOTAL[bkx] || 0;
+    var expectedNow = Math.min(_heard, _cap);          // 当月应为 = heardSet.size（= setMT/recomputeMonthTotal）
+    var stored = (g.monthlyTotals||{})[bkx] || {};
+    Object.keys(stored).forEach(function(ymk){
+      var val = stored[ymk];
+      if(ymk === _nowYM){                              // 当月桶：必须等于 heardSet.size
+        if(val !== expectedNow){ ok4 = false; issues.push("monthlyTotals["+bkx+"]["+ymk+"]("+val+")≠heardSet.size("+expectedNow+")"); }
+      }
+      // 历史月份（ymk < _nowYM）：跨月累积快照，保持原值即合法，不算漂移——不校验
     });
   });
-  Object.keys(tmp).forEach(function(bkx){
-    var cap4 = BOOK_TOTAL[bkx]||Infinity;
-    Object.keys(tmp[bkx]).forEach(function(ymk){ if(tmp[bkx][ymk]>cap4) tmp[bkx][ymk]=cap4; }); // 饱和口径一致
-  });
-  if(JSON.stringify(g.monthlyTotals||{}) !== JSON.stringify(tmp)){ ok4 = false; }
-  if(!ok4) issues.push("monthlyTotals 与 stats 账本不一致（将自动重建）");
+  if(!ok4) issues.push("monthlyTotals 当月桶与 stats 账本不一致（将自动重建）");
   return {ok: issues.length===0, issues: issues};
 }
 
@@ -10229,12 +10400,21 @@ function runLedgerCheck(verbose){
     if(el) el.innerHTML = '<span style="color:#10b981">🧮 账本正常 · 统计口径唯一 · 死账恒等</span>';
     return vr;
   }
-  // 异常：以账本为准自动修平（漂移自愈），随后重算累计并重绘统计
+  // ★ v17：自愈后【立刻重新校验】，成功则渲染为绿色（去抖动，不再永久黄）
   try{ rebuildMonthlyTotals(); normalizeBuckets(); recomputeTotals(); enrichWrongBook(); saveState(); renderStats(); }catch(e){ console.error("账本修平失败", e); }
-  if(el) el.innerHTML = '<span style="color:#f59e0b">🧮 账本曾漂移，已自动修平（以 stats 桶为准）</span>';
+  var vr2 = verifyLedger(g.book, g.unit);   // 用修平后的真实状态再判一次
+  if(vr2.ok){
+    if(el) el.innerHTML = '<span style="color:#10b981">🧮 已自动修平（以 stats 桶为准）· 数据健康</span>';
+    if(vr.issues && vr.issues.length) console.log("[v17] 漂移已修平，账本转绿:", vr.issues);
+    return vr2;
+  }
+  if(el) el.innerHTML = '<span style="color:#f59e0b">🧮 已自动修平（以 stats 桶为准）· 仍存在异常</span>';
+  // ★ v16：无论 verbose 与否，始终打印具体问题，方便排查漂移来源（此前静默导致无法定位根因）
+  if(vr.issues && vr.issues.length){
+    console.warn("[账本自检] 问题("+vr.issues.length+")：", vr.issues);
+  }
   if(verbose){
     try{ toast("账本自检：已自动修平漂移数据"); }catch(e){}
-    console.warn("[账本自检] 问题：", vr.issues);
   }
   return vr;
 }
@@ -10271,18 +10451,6 @@ function getStatsBucket(dateStr){
   g.stats[dateStr] = g.stats[dateStr] || {c:0,w:0,byUnit:{}};
   return g.stats[dateStr];
 }
-// 判断某个 unitKey（byUnit 的键，形如 "课本|单元"）或 wrongBook 的键是否为「连通测试」探针。
-// 连通测试(写云端) 会向 vocab_progress / wrong_words 写入诊断行，绝不应进入任何统计口径。
-// 此处为【单一判定入口】，syncPull 过滤、账本清洗、渲染防御共用，避免正则散落写错（历史坑：
-// /__连通测试__/ 带尾随双下划线，实际匹配不到 "__连通测试_wrong_" 这种单下划线形式）。
-function isDiagKey(k){
-  var s = String(k||"");
-  return s === "__diag__"
-      || s.indexOf("__diag__") === 0
-      || s.indexOf("__连通测试_") === 0
-      || /^__diag__|^__连通测试_/.test(s);
-}
-
 // 判断 g.stats 的键是否为合法日期键（YYYY-MM-DD）
 // 用于过滤 _last_sync 以及旧版同步写入的 "课本|日期" 等脏键，避免统计被污染
 function isStatsDateKey(k){ return typeof k==="string" && /^\d{4}-\d{2}-\d{2}$/.test(k); }
@@ -10292,10 +10460,160 @@ function isStatsDateKey(k){ return typeof k==="string" && /^\d{4}-\d{2}-\d{2}$/.
 // 重置时机不同——跨午夜长会话、次日加载/导入恢复时，会出现「本次 > 今日」的倒挂。
 // 解法：以 _sessionDate 锚定本轮所属日期，日期一变就让会话计数归入新的一天从 0 重计，
 // 从而保证「本次」永远是「今日」桶当天部分的子集（本次 ≤ 今日，永不错乱）。
-function todayStr(){ return new Date().toISOString().slice(0,10); }
+function todayStr(){ var d=new Date(); return new Date(d.getTime()+d.getTimezoneOffset()*60000+8*3600000).toISOString().slice(0,10); }
+// 每日0点协调：跨日后「本次/今日桶/今日已写标记」全部归0。
+// 指令："次日0点清0" = 显示归0 + 存储物理删除（双清）。
+// _todayWritten 是唯一真值标记：只有今日真实作答才为今日日期；
+// checkAnswer/syncPull 写入端均以它为守护，昨日错位与同步脏数据不得冒充今日。
+//
+// ★ v14（双锚点清0，根治「今日未听写仍显示错误1」）：
+//   原逻辑仅在 _sessionDate!==today（跨日）时才清今日桶。若今日从未真实作答，
+//   但今日桶因 syncPull / 历史脏数据残留（如"错误1"），而 _sessionDate 又恰被
+//   恢复为今天，则今日桶永不被清除 → 界面误显。
+//   现改为【双锚点】判据，任一不成立即无条件删除今日桶：
+//     锚点① 桶内容 ：今日桶是否存在（g.stats[today] 有内容）
+//     锚点② 真值标记：g._todayWritten === today（今日确有真实作答）
+//   只有 ① && ② 同时为真，今日桶才予以保留；否则物理删除 + 会话计数归0。
+//   这样即使 _sessionDate 被恢复/错位，只要今日没真答，今日桶必被清空。
 function reconcileSession(){
   var today = todayStr();
-  if(g._sessionDate !== today){ g.correct = 0; g.wrong = 0; g._sessionDate = today; }
+  var todayBucket = (g.stats && g.stats[today]) || null;
+  var bucketHasContent = !!(todayBucket && todayBucket.byUnit &&
+                            Object.keys(todayBucket.byUnit).length > 0);
+  var writtenToday = (g._todayWritten === today);   // 锚点②：今日确曾真实作答
+
+  if(g._sessionDate !== today){
+    // —— 跨日：会话计数无条件归0，今日桶仅在"今日真实作答"前提下保留 ——
+    g.correct = 0; g.wrong = 0; g._sessionDate = today;
+    if(!writtenToday && bucketHasContent){
+      // 双锚点失配：今日桶有内容但今日未真实作答 → 残留脏数据，无条件删除
+      delete g.stats[today];
+      bucketHasContent = false;
+      console.info("[reconcileSession] 双锚点清0：今日未真实作答，删除残留今日桶");
+    }
+    // 今日确实作答过：保留桶，仅重置"已写"标记（次日新一天，等待新一轮作答）
+    g._todayWritten = writtenToday ? today : "";
+    g._lastReconciledDate = today;   // 幂等保护：同日只清一次，防重复归0
+    // 恒等式再对齐（防御性）
+    try { if(g.book) recomputeMonthTotal(g.book); }catch(e){}
+  } else {
+    // —— 同日但发现失配：今日桶有残留、却无今日真值标记（如 syncPull 脏写 / 旧版遗留）
+    //   → 主动修正，避免"今日未听写仍显示错误1"
+    if(bucketHasContent && !writtenToday){
+      delete g.stats[today];
+      console.info("[reconcileSession] 双锚点自检修正：清除无真值标记的今日桶");
+      try { if(g.book) recomputeMonthTotal(g.book); }catch(e){}
+    }
+  }
+}
+
+// ===== 每一遍的本地归档快照（不上云端）=====
+// 清0「前」把这一遍的完整数据落地到 g.passArchive，供「上一遍可回溯 / 拉取备份还原」使用。
+// 仅保存本地 localStorage，绝不调用 pushToCloud / syncPush，与云端备份完全解耦。
+function createPassArchive(book, doneDate, passNo){
+  var cap = BOOK_TOTAL[book] || 0;
+  var heard = getHeardSet(book, "__all").size;  // 遍内去重已听写单词数
+  var tc = 0, tw = 0;
+  Object.keys(g.stats||{}).forEach(function(k){
+    if(!isStatsDateKey(k)) return;
+    var s = getScopedStats(g.stats[k], book, "__all");
+    tc += s.c; tw += s.w;
+  });
+  var archive = {
+    book: book,
+    passNo: passNo,                      // 第几遍（从1起）
+    doneDate: doneDate,                  // 完成日 YYYY-MM-DD
+    totalHeard: heard,                   // 遍内去重已听写单词数（≤cap）
+    cap: cap,                            // 册总量
+    remain: Math.max(0, cap - heard),    // 清0前剩余（完成时应为0）
+    totalCorrect: tc,                    // 该遍累计正确
+    totalWrong: tw,                      // 该遍累计错误
+    rate: (tc+tw)>0 ? Math.round(tc/(tc+tw)*100) : 0,  // 该遍正确率%
+    wrongBook: cloneObj(g.wrongBook||{}),      // 错词本快照（清0前）
+    masteredWords: cloneObj(g.masteredWords||{}),  // 已掌握快照（清0前）
+    archivedAt: new Date().toISOString()
+  };
+  g.passArchive = Array.isArray(g.passArchive) ? g.passArchive : [];
+  // 去重：同一(book, passNo) 只保留一份（幂等，防重复执行）
+  g.passArchive = g.passArchive.filter(function(a){ return !(a.book===book && a.passNo===passNo); });
+  g.passArchive.push(archive);
+  var MAX_ARCHIVE = 50;
+  if(g.passArchive.length > MAX_ARCHIVE) g.passArchive = g.passArchive.slice(g.passArchive.length - MAX_ARCHIVE);
+  try{ localStorage.setItem("vocab_pass_archive", JSON.stringify(g.passArchive)); }catch(e){}
+  console.info("[遍数归档] "+book+" 第"+passNo+"遍 已本地保存（不上云）", archive);
+}
+
+// ===== 每日0点自动推进遍数 =====
+// 一本书听写完（剩余新词=0）后，次日0点清0 → 第二遍从总词量重新开始。
+// 流程：① 听写完时记录 bookCompletedDate；② 次日0点后，先为「上一遍」建本地归档快照
+//       （createPassArchive，不上云，幂等仅一次），再 passCount++、清除该册数据、归0。
+// 幂等，可重复执行；passCount 自增基于「是否存在 bookCompletedDate」判定，杜绝每天+1的漂移。
+function advanceBookPass(){
+  var today = todayStr();
+  g.passCount = g.passCount || {};
+  g.bookCompletedDate = g.bookCompletedDate || {};
+  g.passArchive = Array.isArray(g.passArchive) ? g.passArchive : [];
+  Object.keys(g.bookCompletedDate||{}).forEach(function(book){
+    var doneDate = g.bookCompletedDate[book];
+    if(!doneDate) return;
+    if(today > doneDate){
+      var cap = BOOK_TOTAL[book] || 0;
+      var passNo = (g.passCount[book]||0) + 1;   // 即将完成的是第几遍（从1起）
+      // ① 清0「前」先落本地归档（不上云），幂等：同一(book,passNo)只建一次
+      createPassArchive(book, doneDate, passNo);
+      // ② passCount++（基于 doneDate 判定，次日仅触发一次，不会每日累加）
+      g.passCount[book] = passNo;
+      // ③ 清除该册所有单元的已掌握记录 → 第二遍全部单词重新成为"新词"
+      Object.keys(g.masteredWords||{}).forEach(function(k){
+        if(k.indexOf(book+"|") === 0) delete g.masteredWords[k];
+      });
+      // ④ 清除该册错词本（第二遍重新统计）
+      Object.keys(g.wrongBook||{}).forEach(function(w){
+        if(g.wrongBook[w] && g.wrongBook[w].book === book) delete g.wrongBook[w];
+      });
+      // ⑤ 遍归0：heardSet 数据源（masteredWords/wrongBook）已在③④清掉，
+      //    heardSet.size → 0 ⇒ 恒等式自动：remain = cap、当月听写量 = 0。
+      //    显式清 monthlyTotals 兜底（派生缓存一致性），第二遍重新从总词量开始。
+      //    ★ 遍周期 = 册总量（与月份完全解耦）：无论跨不跨月，听完次日0点即归0，
+      //      不按"当月"重置，而是按"一遍"(=听完一整册)重置——跨月继续听写同样归0重计。
+      if(g.monthlyTotals && g.monthlyTotals[book]){
+        Object.keys(g.monthlyTotals[book]).forEach(function(ymk){
+          g.monthlyTotals[book][ymk] = 0;       // 所有月份桶全部归0（遍周期 ≠ 月周期）
+        });
+      }
+      // 恒等式断言（调试期自检，漂移即修正；以 heardSet 为准刷新派生缓存）
+      (function(){
+        var cap5 = BOOK_TOTAL[book] || 0;
+        var heard5 = getHeardSet(book, "__all").size;
+        var rem5 = cap5 > 0 ? Math.max(0, cap5 - heard5) : 0;
+        var mt5 = recomputeMonthTotal(book);            // 唯一写入源：= heardSet.size
+        if(cap5 > 0 && (rem5 + mt5) !== cap5){
+          console.warn("[恒等式漂移] "+book+": 剩余"+rem5+" + 当月"+mt5+" ≠ "+cap5+"（自动以 heardSet 为准修平）");
+        }
+      })();
+      delete g.bookCompletedDate[book];
+      saveState(); renderStats(); renderChart(); renderWrong();
+    }
+  });
+}
+
+// ===== 改错全部改正完后次日0点清0 =====
+// 当错词本全部已改正（fixed:true）时记录 allFixedDate；次日0点后清空错词本，重新开始累积。
+// 若有新错词产生（unfixed > 0），清除标记继续累积。幂等。
+function advanceFixClear(){
+  var today = todayStr();
+  g.allFixedDate = g.allFixedDate || "";
+  var all = Object.values(g.wrongBook||{});
+  var unfixed = all.filter(function(x){ return !x.fixed; }).length;
+  if(all.length > 0 && unfixed === 0){
+    if(!g.allFixedDate) g.allFixedDate = today;
+  } else {
+    g.allFixedDate = "";
+  }
+  if(g.allFixedDate && today > g.allFixedDate){
+    g.wrongBook = {};
+    g.allFixedDate = "";
+  }
 }
 
 // HTML 转义，防止册名等用户输入/异常字符造成注入
@@ -10306,12 +10624,13 @@ function escapeHtml(str){
 }
 
 // =====================================================================
-// ===== 册级统计（死账）：剩余新词 / 月听写量 / 跨月红字，均以「册」为单位 =====
-// 规则（用户定稿）：
-//   册总量 = 该册全部单词数（全部单元为一册；高考3500正/乱序各为一册）
-//   月听写量 = 本月·本册累计答题次数（正确+错误+跳过，听一个计一个，无论对错），上限=册总量
-//   剩余新词 = 册总量 − 月听写量（永 ≥ 0）
-//   听完(月听写量≥册总量) → 次日归0；跨月红字「跨N月」= 当前月 − 结转起源月，听完当日0点消失
+// ===== 册级统计（恒等式口径，v9 定锚）：剩余新词 / 当月听写量 / 跨月，均以「册」为单位 =====
+// 规则（用户定稿，不再变更）：
+//   册总量   = 该册全部单词数（全部单元为一册；高考3500正/乱序各为一册）
+//   当月听写量 = 册总量 − 剩余新词 = 该册去重已听写单词数(heardSet.size)
+//               （一个单词算一次，含跳过；允许跨月，遍周期与月份无关，不封顶）
+//   剩余新词 = 册总量 − 已听写（去重）  →  剩余 + 当月听写量 ≡ 册总量(cap) 恒成立
+//   听完全册 → 次日0点 advanceBookPass 归0 → 第二遍从总词量重启
 // =====================================================================
 
 // 每册总量（单一基准，从 VOCAB_DATA 动态算出，保证"该多少就是多少"）
@@ -10383,12 +10702,17 @@ function enrichWrongBook(){
 
 // 当前月整数键：year*12 + month(0-based)，便于做月份差值「跨N月」
 function currentYM(){
-  var n = new Date();
-  return n.getFullYear()*12 + n.getMonth();
+  // 月份键：锁定北京时间（UTC+8），与 todayYMD / todayStr 同源
+  var d = new Date();
+  var bj = new Date(d.getTime()+d.getTimezoneOffset()*60000+8*3600000);
+  return bj.getUTCFullYear()*12 + bj.getUTCMonth();
 }
 function ymToLabel(ym){ var y=Math.floor(ym/12), m=(ym%12)+1; return y+"-"+(m<10?"0"+m:m); }
 
-// monthlyTotals[book][ym] = 该册该月「听写次数」(c+w+跳过)，由 stats 推导并增量维护（派生缓存）
+// 当月听写量 = 册总量 − 剩余新词 = 该册「去重已听写单词数」（heardSet.size）
+// 口径与剩余新词统一为「一个单词算一次」，允许跨月累计，永不封顶。
+// monthlyTotals 是派生缓存：唯一写入源是 recomputeMonthTotal()（= heardSet.size）。
+// setMT/getMT 保留作缓存读写接口；checkAnswer 不再 +1 累加。
 function getMT(book, ym){
   var b = (g.monthlyTotals||{})[book];
   return (b && b[ym]) || 0;
@@ -10396,62 +10720,68 @@ function getMT(book, ym){
 function setMT(book, ym, v){
   g.monthlyTotals = g.monthlyTotals || {};
   g.monthlyTotals[book] = g.monthlyTotals[book] || {};
-  g.monthlyTotals[book][ym] = v;
+  // 去重口径：v 来自 heardSet.size，本就 ≤ cap，无需封顶
+  g.monthlyTotals[book][ym] = (v >= 0) ? v : 0;
 }
 
-// 从权威账本 g.stats 重建 monthlyTotals（幂等，可作迁移/自检修复）
+// 从权威口径重建 monthlyTotals（幂等，可作迁移/自检修复）
+// v9：当月听写量 ≡ heardSet.size（去重已听写单词数），与剩余新词共享单一口径。
+// 因此重建直接以 recomputeMonthTotal（= heardSet.size）为准，不再按 c+w 累加（避免次数口径回渗）。
 function rebuildMonthlyTotals(){
-  g.monthlyTotals = {};
-  Object.keys(g.stats||{}).forEach(function(k){
-    if(!isStatsDateKey(k)) return;
-    var st = g.stats[k]; if(!st || !st.byUnit) return;
-    var parts = k.split("-");
-    var ym = parseInt(parts[0],10)*12 + (parseInt(parts[1],10)-1);
-    Object.keys(st.byUnit).forEach(function(uk){
-      if(isDiagKey(uk)) return; // 防御：跳过连通测试探针键，不进入任何册统计
-      var splitAt = uk.lastIndexOf("|");
-      var bk = splitAt>=0 ? uk.slice(0, splitAt) : uk;
-      var cnt = (st.byUnit[uk].c||0) + (st.byUnit[uk].w||0); // 历史：正确+错误
-      if(cnt>0){ setMT(bk, ym, (getMT(bk, ym)||0) + cnt); }
-    });
+  g.monthlyTotals = g.monthlyTotals || {};
+  Object.keys(BOOK_TOTAL||{}).forEach(function(bk){
+    if(isDiagnosticBook(bk)) return;               // 过滤连通测试探针册
+    recomputeMonthTotal(bk);                        // 唯一写入源：heardSet.size
   });
-  // 饱和：单月听写超过册总量视为「已听完」，按册总量封顶（与结转判定一致）
+  // bookEarliest：最早有听写的月份（用于跨月红字）
   g.bookEarliest = {};
   Object.keys(g.monthlyTotals||{}).forEach(function(bk){
-    var cap = BOOK_TOTAL[bk] || Infinity;
     var minYM = Infinity;
     Object.keys(g.monthlyTotals[bk]).forEach(function(ymk){
       var ymn = parseInt(ymk,10);
       if(ymn < minYM) minYM = ymn;
-      if(g.monthlyTotals[bk][ymk] > cap) g.monthlyTotals[bk][ymk] = cap;
     });
     if(minYM !== Infinity) g.bookEarliest[bk] = minYM;
   });
+}
+
+// 恒等式权威入口：当月听写量 = heardSet.size（= 册总量 − 剩余新词）
+// 任何地方需要"当月听写量"都经此函数，保证 剩余 + 当月听写量 ≡ 册总量(cap)
+function recomputeMonthTotal(book){
+  var cap = BOOK_TOTAL[book] || 0;
+  var heard = getHeardSet(book, "__all").size;   // 去重已听写单词数
+  var mt = Math.min(heard, cap);                   // 仅做物理上限保护（heard≤cap 恒成立）
+  var ym = currentYM();
+  setMT(book, ym, mt);
+  return mt;
 }
 
 // 计算某册在当前月的：月听写量、剩余新词、跨月数
 // 全部由 monthlyTotals（源自 stats 账本）推导 → 死账，可随时重建
 function computeBookStats(book, ym){
   var cap = BOOK_TOTAL[book] || 0;
-  var thisRaw = getMT(book, ym);
-  // 向后追溯「未听完的连续结转」：空月(休息)不重置进度；
-  // 某月 ≥ 册总量(听完) → 该月结转清零并继续往前；累计满册则本月归0重开（听完归0）
-  var earliest = (g.bookEarliest||{})[book];
-  var acc = 0, startFound = null;
-  for(var M=ym-1; M>= (earliest!=null? earliest : 0); M--){
-    var raw = getMT(book, M);
-    if(raw >= cap && cap>0){ acc = 0; startFound = null; continue; } // 该月听完 → 结转清零
-    if(raw > 0){ acc += raw; startFound = M; }                        // 累加进度，记录最老活跃月
-  }
-  // 累计已达册总量 → 本月从0重开（听完归0），跨月红字随之消失
-  if(acc >= cap && cap>0){ acc = 0; startFound = null; }
-  var carry = acc, carryStart = startFound;
-  var monthTotal = Math.min(carry + thisRaw, cap);
-  var remain = cap - monthTotal;
-  var finished = (cap>0 && monthTotal >= cap);
-  // 跨N月：结转仍活跃(未听完)且确有结转量时，N = 当前月 − 结转起源月
-  var crossN = (!finished && carry>0 && carryStart!=null) ? (ym - carryStart) : 0;
-  return {monthTotal: monthTotal, remain: remain, crossN: crossN, finished: finished, carry: carry};
+  // 恒等式口径（指令原文，v9 定锚不再变更）：
+  //   剩余新词   = 册总量 − 已听写（去重，一个单词算一次）
+  //   当月听写量 = 册总量 − 剩余新词 = 已听写去重单词数（允许跨月，遍周期与月份无关）
+  //   ⇒ 剩余新词 + 当月听写量 ≡ 册总量(cap)，编译期强制（见 verifyLedger）
+  var heardSet = getHeardSet(book, "__all");
+  var totalHeard = heardSet.size;                    // 去重已听写单词数（单一口径）
+  var monthTotal = recomputeMonthTotal(book);          // ① 当月听写量（= 总量 − 剩余，恒等式权威入口）
+  var remain = cap > 0 ? Math.max(0, cap - totalHeard) : 0;  // ② 剩余新词
+  // 跨遍循环：听完全册 → advanceBookPass 清0 masteredWords/wrongBook → totalHeard 回落 → remain 回满
+  var inPass = (cap > 0 && totalHeard >= cap) ? 0 : totalHeard;
+  // 已完成遍数（持久化在 g.passCount，此处仅用于返回）
+  var donePasses = (g.passCount && g.passCount[book]) || 0;
+
+  // ④ 是否听完全册
+  var finished = (cap > 0 && inPass === 0 && totalHeard > 0);
+
+  // ⑤ 跨月红字：已移除。遍周期与月份完全解耦——遍 = 听完一整册（≥cap），
+  //    无论跨不跨月，听完次日0点即归0、遍数+1、第二遍重新累计（advanceBookPass）。
+  //    因此不再有"跨月"概念，crossN 恒为 0（保留字段以兼容历史 renderStats 调用）。
+  var crossN = 0;
+
+  return {monthTotal: monthTotal, remain: remain, crossN: crossN, finished: finished, carry: 0, pass: donePasses};
 }
 localStorage.setItem("vocab_device", g.deviceId);
 
@@ -10528,18 +10858,26 @@ function init(){
     if(typeof saved.correct==="number") g.correct = saved.correct;
     if(typeof saved.wrong==="number") g.wrong = saved.wrong;
     if(typeof saved._sessionUpdatedAt==="number") g._sessionUpdatedAt = saved._sessionUpdatedAt;
-    if(typeof saved.totalCorrect==="number") g.totalCorrect = saved.totalCorrect;
-    if(typeof saved.totalWrong==="number") g.totalWrong = saved.totalWrong;
+    // ★ v16：不再直接恢复 totalCorrect/totalWrong/monthlyTotals 的存档值——
+    //   这些是「死账派生」字段，由 recomputeTotals/rebuildMonthlyTotals 从 stats 桶实时算出。
+    //   先恢复权威源（stats / masteredWords），再由下方统一重算覆盖，避免脏值窗口期触发误漂。
+    // if(typeof saved.totalCorrect==="number") g.totalCorrect = saved.totalCorrect;   // 废弃：改由 recomputeTotals 派生
+    // if(typeof saved.totalWrong==="number") g.totalWrong = saved.totalWrong;         // 废弃：同上
     if(saved.book) g.book = saved.book;
     if(saved.unit) g.unit = saved.unit;
-    // 恢复已掌握单词记录
+    // 恢复已掌握单词记录（heardSet 的权威来源之一）
     if(saved.masteredWords && typeof saved.masteredWords === "object") g.masteredWords = saved.masteredWords;
+    // monthlyTotals 不再采信存档字面量，改由下方 rebuildMonthlyTotals 以 heardSet.size 重建；
+    // 若存档结构完整则暂存作基线，rebuild 会覆盖（兼容旧存档）。
     if(saved.monthlyTotals && typeof saved.monthlyTotals === "object") g.monthlyTotals = saved.monthlyTotals;
     if(saved._sessionDate) g._sessionDate = saved._sessionDate;
     // 恢复数据版本号与时间戳（单调递增，永不回退）
     if(typeof saved.dataVersion==="number" && saved.dataVersion > (g.dataVersion||0)) g.dataVersion = saved.dataVersion;
     if(typeof saved.updatedAt==="number") g.updatedAt = saved.updatedAt;
-    normalizeBuckets(); recomputeTotals(); rebuildMonthlyTotals(); // 加载后以账本为准重算累计，并重建册级月听写量
+    // ★ v16：先 normalize（修桶） → rebuildMonthlyTotals（以 heardSet 重建月听写量） → recomputeTotals（以 byUnit 重建累计）
+    //   顺序关键：recomputeMonthTotal 依赖 getHeardSet，须先确保 masteredWords/stats 已恢复。
+    normalizeBuckets(); rebuildMonthlyTotals(); recomputeTotals(); // 加载后以账本为准重算累计，并重建册级月听写量
+    purgeDiagnosticProbes();                                      // 清除历史连通测试探针污染的分册明细/错词本
     // 会话锚点协调：若恢复的「本次」不属于今天（次日打开 / 旧版无锚点数据），则清零，避免「本次 > 今日」倒挂
     reconcileSession();
   }catch(e){}
@@ -10705,13 +11043,14 @@ function init(){
     var p = document.getElementById("backupPanel");
     p.classList.toggle("hidden");
     document.getElementById("toggleBackup").textContent = p.classList.contains("hidden")?"💾 备份管理 [展开]":"💾 备份管理 [收起]";
-    if(!p.classList.contains("hidden")) renderBackupList();
+    if(!p.classList.contains("hidden")){ renderBackupList(); renderPassHistory(); }
   };
   document.getElementById("btnManualBackup").onclick = manualBackup;
   document.getElementById("btnExportWithBackup").onclick = exportJSON;
   // 启动时检测旧版数据
   checkLegacyData();
   renderBackupList();
+  renderPassHistory();
   document.getElementById("btnSave").onclick = saveSupaConfig;
   document.getElementById("btnTest").onclick = testSupa;
   document.getElementById("btnPush").onclick = function(){ dispatchPush(true); };
@@ -10730,6 +11069,42 @@ function init(){
   if(elAutoUp) elAutoUp.checked = !!g.autoUploadOnLogin;
   var btnSaveInterval = document.getElementById("btnSaveInterval");
   if(btnSaveInterval) btnSaveInterval.onclick = saveIntervalConfig;
+  var btnResetInterval = document.getElementById("btnResetInterval");
+  if(btnResetInterval) btnResetInterval.onclick = resetIntervalDefaults;
+
+  // —— 实时校验：输入时即时提示，非法时禁用「保存间隔」——
+  function validateIntervals(){
+    var p = document.getElementById("autoPushInterval");
+    var q = document.getElementById("autoPullInterval");
+    var hint = document.getElementById("intervalHint");
+    var saveBtn = document.getElementById("btnSaveInterval");
+    if(!p||!q||!hint) return { valid:true };
+    var pv = parseInt(p.value)||0, qv = parseInt(q.value)||0;
+    var msg = "", color = "#64748b";
+    var valid = true;
+    if(qv > pv){ msg = "⚠️ 下载间隔不应大于上传间隔（建议先拉后推，避免冲突）"; color = "#dc2626"; valid = false; }
+    else if(pv >= 5 && qv >= 3){ msg = "✅ 配置合法"; color = "#16a34a"; }
+    hint.style.color = color;
+    hint.textContent = msg;
+    if(saveBtn){ saveBtn.disabled = !valid; saveBtn.style.opacity = valid ? "1" : "0.5"; }
+    return { valid:valid };
+  }
+  // 失焦自动校正：上传<5→5，下载<3→3
+  var elPushIv2 = document.getElementById("autoPushInterval");
+  var elPullIv2 = document.getElementById("autoPullInterval");
+  if(elPushIv2) elPushIv2.addEventListener("blur", function(){
+    var v = parseInt(elPushIv2.value)||0;
+    if(v < 5){ elPushIv2.value = 5; toast("上传间隔已自动校正为最小值 5 秒"); }
+    validateIntervals();
+  });
+  if(elPullIv2) elPullIv2.addEventListener("blur", function(){
+    var v = parseInt(elPullIv2.value)||0;
+    if(v < 3){ elPullIv2.value = 3; toast("下载间隔已自动校正为最小值 3 秒"); }
+    validateIntervals();
+  });
+  if(elPushIv2) elPushIv2.addEventListener("input", validateIntervals);
+  if(elPullIv2) elPullIv2.addEventListener("input", validateIntervals);
+  validateIntervals(); // 初始校验一次
 
   // 页面打开自动下载：启动拉取一次（Realtime 连接前的兜底，保证首屏即与云端一致）
   // —— 此行已由下方 setTimeout(dispatchPull) 承担，无需重复
@@ -10765,7 +11140,10 @@ function init(){
   document.addEventListener("touchstart", unlockOnce);
 
   renderStats(); renderChart(); renderWrong();
-  runLedgerCheck(false); // 页面加载即校验账本，状态常驻显示在统计栏
+  runLedgerCheck(false);
+  /* v17: 读档后幂等重算并把干净值回写存档，打破脏值循环 */
+  try{ rebuildMonthlyTotals(); normalizeBuckets(); recomputeTotals(); enrichWrongBook(); saveState(true); }catch(e){ console.warn("[v17] loadState 回写失败",e); }
+  // 页面加载即校验账本，状态常驻显示在统计栏
   if(g.supaUrl && g.supaKey) initSupa();
   renderAuthUI();
   setTimeout(function(){ try{ dispatchPull(false); }catch(e){ console.error("自动同步失败",e); g._syncing=false; updateSyncStatus("自动同步失败",false); } }, 3000);
@@ -11001,8 +11379,9 @@ function checkAnswer(ans){
   }
   // 【死账原则】totalCorrect/totalWrong 不再靠 += 累加（会与账本 drift），
   // 统一由 recomputeTotals() 从 stats 桶实时算出。此处只往账本（bucket + byUnit）记账。
-  var today = new Date().toISOString().slice(0,10);
+  var today = todayStr();
   g._sessionDate = today; // 锚点归到当天（reconcileSession 已在顶部处理跨日清零）
+  g._todayWritten = today; // 标记：今日确有真实作答（用于「未听写则今日各项归0」）
   var bucket = getStatsBucket(today);
   if(isCorrect) bucket.c++;
   else if(a) bucket.w++;
@@ -11010,17 +11389,36 @@ function checkAnswer(ans){
   // 全部单元模式下统一归到 __all，便于与 statsKey(g.book, g.unit) 对齐；具体单元按单词原始 unit
   var curUnit = g.unit==="__all" ? "__all" : (cur.unit || g.unit);
   var uKey = statsKey(curBook, curUnit);
-  bucket.byUnit[uKey] = bucket.byUnit[uKey] || {c:0,w:0};
-  if(isCorrect) bucket.byUnit[uKey].c++;
-  else if(a) bucket.byUnit[uKey].w++;
-  // 月听写量（册级）：每一个被听写的词计 1（正确/错误/跳过均计），按册聚合，供跨月结转与剩余新词使用
-  if(heard){
-    var ymC = currentYM();
-    setMT(curBook, ymC, getMT(curBook, ymC) + 1);
+  // ★ 写入端守护：只有「今日真实作答」才写入今日桶，昨日错位/同步脏数据不得冒充今日
+  // （syncPull 还原同理，亦仅在 _todayWritten===today 时归入今日）
+  var _tdayNow = todayStr();
+  var _isTodayWrite = (heard && g._todayWritten === _tdayNow);
+  if(_isTodayWrite){
+    bucket.byUnit[uKey] = bucket.byUnit[uKey] || {c:0,w:0};
+    if(isCorrect) bucket.byUnit[uKey].c++;
+    else if(a) bucket.byUnit[uKey].w++;
   }
+  // 月听写量 / 剩余新词：单一口径 = 去重已听写单词数（heardSet.size），
+  // 由 markDone/addWrong 自动计入；此处仅在「今日真实作答」前提下刷新派生缓存，绝不 +1 累加。
+  // 「听写统计·日/周/月总量」= getAllBooksStats(不分册、全册之和)，分册明细 = aggregateByBook(按册拆分)，
+  // 二者对同一 byUnit 求和 → 顶部总量 ≡ Σ分册明细，恒成立。
+  // 见 updatePeriodStats / renderChart / aggregateByBook。
+  if(_isTodayWrite){
+    recomputeMonthTotal(curBook);
+  }
+  // ★ 听写完检测：本册累计已听写 ≥ 册总量 → 记录完成日期（次日0点 advanceBookPass 清0进下一遍）
+  (function(){
+    var cap = BOOK_TOTAL[curBook] || 0;
+    if(cap <= 0) return;
+    var heardNow = getHeardSet(curBook, "__all").size;
+    if(heardNow >= cap){
+      g.bookCompletedDate = g.bookCompletedDate || {};
+      if(!g.bookCompletedDate[curBook]) g.bookCompletedDate[curBook] = todayStr();
+    }
+  })();
   g.idx++;
   g._sessionUpdatedAt = Date.now(); // 标记本次会话为新，供多设备 LWW 合并
-  saveState(); renderStats(); renderChart(); renderWrong();
+  saveState(); renderStats(); renderChart(); renderWrong(); renderPassHistory();
   if(g.supaUrl && g.supaKey) debouncePush();
   g._displayLock = false;
   var delay = a ? 2000 : 800;
@@ -11070,48 +11468,67 @@ function markDone(word){
 
 // ===== 渲染统计 =====
 function renderStats(){
+  // 每日0点自动推进：听完全册次日清0进下一遍 / 改错全部改正后次日清0
+  advanceBookPass();
+  advanceFixClear();
+
   // ===== 册总量（以「册」为单位，全部单元合一册；3500正/乱序各为一册）=====
   var cap = BOOK_TOTAL[g.book] || 0;
 
-  // ===== 月听写量 / 剩余新词 / 跨月（册级，死账：由 monthlyTotals 推导）=====
+  // ===== 月听写量 / 剩余新词 / 跨月 / 遍数（册级，死账）=====
+  // 恒等式保证：每次渲染前以 heardSet(去重) 为准刷新当月量，杜绝与 remain 漂移
+  recomputeMonthTotal(g.book);
   var ym = currentYM();
   var bs = computeBookStats(g.book, ym);
-  var monthTotal = bs.monthTotal;   // 本月·本册累计（听一个计一个，上限=册总量）
-  var remain = bs.remain;          // 剩余新词 = 册总量 − 月听写量
+  var monthTotal = bs.monthTotal;   // 当月·当册听写总量（仅本月，不结转）
+  var remain = bs.remain;          // 剩余新词 = 总词量 − 累计已听写（去重）
   document.getElementById("sMonthTotal").textContent = monthTotal;
   document.getElementById("sRemain").textContent = remain;
 
-  // 跨月红字：结转仍活跃(未听完)时显示「跨N月 · 继续听写」，听完当日0点消失
-  var tag = document.getElementById("crossMonthTag");
-  if(tag){
-    if(bs.crossN > 0 && !bs.finished){
-      tag.innerHTML = '<span style="color:#ef4444;font-weight:700">跨' + bs.crossN + '月</span>' +
-                      '<span style="color:#64748b"> · 继续听写</span>';
-      tag.style.display = "";
-    } else {
-      tag.innerHTML = "";
-      tag.style.display = "none";
-    }
+  // 遍数显示：第1遍/第2遍…（当前遍 = 已完成遍数 + 1）；从第1遍起即显示在「剩余新词」红字旁
+  // 遍周期与月份完全解耦：遍 = 听完一整册（≥cap），听完次日0点归0 + 遍数+1（advanceBookPass）。
+  var donePasses = (g.passCount && g.passCount[g.book]) || 0;
+  var curPass = donePasses + 1;
+  var passEl = document.getElementById("passLabel");
+  if(passEl){
+    // ★ 遍数红字紧跟「剩余新词」（HTML: <div class="l">剩余新词 <span id="passLabel"></span></div>）
+    passEl.textContent = (cap > 0) ? ("第" + curPass + "遍") : "";
+    passEl.style.color = "#ef4444";
+    passEl.style.fontWeight = "700";
+    passEl.style.marginLeft = "4px";
   }
 
-  // 已掌握/已听写（按当前范围，仅供「已掌握」展示，不影响册级剩余新词）
+  // 跨月红字：已移除。遍周期与月份解耦，不再有"跨月"概念。
+  var tag = document.getElementById("crossMonthTag");
+  if(tag){ tag.innerHTML = ""; tag.style.display = "none"; }
+
+  // 已掌握/已听写（按当前范围）
   var masteredCount = getMasteredCount(g.book, g.unit);
   var heardCount = getHeardSet(g.book, g.unit).size;
 
-  // 本次正确/错误（本轮会话，瞬时）
+  // 本次正确/错误（本轮会话，次日0点清0，由 reconcileSession 保证）
   document.getElementById("sCorrect").textContent = g.correct;
   document.getElementById("sWrong").textContent = g.wrong;
-  // 「本组总数」= 本次（本轮听写）的词量 = 当前队列 g.remain 的长度；未开始时回退到每组数量 g.n
+  // 本组总数 = 本次词量 = 当前队列长度；未开始时回退到 g.n
   var groupTotal = (g.remain && g.remain.length) || g.n || cap;
-  document.getElementById("sTotal").textContent = groupTotal; // 本次词量
+  document.getElementById("sTotal").textContent = groupTotal;
 
-  // 今日统计（按当前课本/单元）
-  var today = new Date().toISOString().slice(0,10);
-  var td = getScopedStats(g.stats[today], g.book, g.unit);
+  // 今日统计（今日总量 = 今日·全册之和，不分册；今日正确率同源，次日0点归0）
+  // 口径(v14)：今日总量 = 今日所有听写量，不分册 —— 与「听写统计·日顶部总量」同口径(= getAllBooksStats)。
+  // 指令：今日尚未听写 → 今日总量/正确率/本次正确错误 应全部归0。
+  // 以 _todayWritten 标记是否为「今日真实作答」产生；昨日错位/同步脏数据不得冒充今日。
+  var tday = todayStr();
+  var todayWritten = (g._todayWritten === tday);
+  var td = todayWritten ? getAllBooksStats(g.stats[tday]) : {c:0, w:0};
   var todayTotal = td.c + td.w;
   document.getElementById("sTodayTotal").textContent = todayTotal;
   document.getElementById("sTodayRate").textContent = todayTotal ? Math.round(100*td.c/todayTotal)+"%" : "0%";
-  // 总正确率：按当前课本累计（册内各单元合计）
+  // 今日未听写时，本次正确/错误也强制归0（覆盖内存残留/跨日未清场景）
+  if(!todayWritten){
+    document.getElementById("sCorrect").textContent = 0;
+    document.getElementById("sWrong").textContent = 0;
+  }
+  // 总正确率 = 所选册累计（册内全部单元合计）
   var totalScope = getTotalScopedStats(g.book, "__all");
   var den2 = totalScope.c + totalScope.w;
   document.getElementById("sTotalRate").textContent = den2 ? Math.round(100*totalScope.c/den2)+"%" : "0%";
@@ -11119,16 +11536,18 @@ function renderStats(){
   updatePeriodStats(); updatePeriodFix();
   var scopeLabel = g.unit==="__all" ? g.book+"·全部" : g.book+"·"+g.unit;
   var heardInfo = heardCount > 0 ? " · 已听写过 " + heardCount : "";
+  var passInfo = donePasses > 0 ? " · 第" + curPass + "遍" : "";
   document.getElementById("hdrInfo").textContent =
-    scopeLabel + " · 册总量 " + cap + " · 已掌握 " + masteredCount + heardInfo +
-    " · 剩余 " + remain + " · 月听写 " + monthTotal;
+    scopeLabel + passInfo + " · 册总量 " + cap + " · 已掌握 " + masteredCount + heardInfo +
+    " · 剩余 " + remain + " · 当月听写 " + monthTotal;
 }
 function updatePeriodStats(){
   var mode = g.rangeMode||"day";
   var c=0,w=0;
-  // 与图表/分册明细共用同一日期集合(自然日/自然周/自然月)，杜绝滑动窗口口径不一致
+  // 定稿规则：听写统计总量「不分册」——统计时段内全部册（与分册明细之和 ≡ 总量）。
+  // 与图表/分册明细共用同一日期集合(自然日/自然周/自然月)，杜绝滑动窗口口径不一致。
   getRangeDates(mode).forEach(function(k){
-    var s = getScopedStats(g.stats[k], g.book, g.unit);
+    var s = getAllBooksStats(g.stats[k]);   // ← 不分册（原为 getScopedStats 仅当前册）
     c += s.c; w += s.w;
   });
   var tot=c+w;
@@ -11136,82 +11555,90 @@ function updatePeriodStats(){
   document.getElementById("pWrong").textContent = w;
   document.getElementById("pCorrectBar").style.width = tot?(c/tot*100)+"%":"0%";
   document.getElementById("pWrongBar").style.width = tot?(w/tot*100)+"%":"0%";
-  // 更新标签提示当前范围
-  var scopeLabel = g.unit==="__all" ? g.book+"·全部" : g.book+"·"+g.unit;
-  document.getElementById("pCorrect").setAttribute("title", scopeLabel);
+  // 更新标签提示当前范围（总量不分册，标注"全部册"）
+  document.getElementById("pCorrect").setAttribute("title", "全部册·"+ (mode==="day"?"当日":mode==="week"?"本周":"本月"));
 }
+// ★ 改错统计单一事实源（用户定稿口径，v13）：
+//   错词本 = 当前册·未改正错词
+//   改错统计·日 = 今日(新增/改正)错词
+//   改错统计·周 = 本周(周一~今日)
+//   改错统计·月 = 本月(1号~今日)
+//   约束：① 日 ≠ 周 ≠ 月（三窗口独立分化）
+//         ② 错词本 ≡ 改错统计（同一作用域 = 当前册）
+//   作用域 = 「当前所选册 g.book」∩「对应时间窗口」∩「排除连通测试探针」
+function getWrongInScope(mode){
+  mode = mode || g.rangeMode || "day";
+  var since = getRangeStartTs(mode);      // 日=今日0点 / 周=本周一0点 / 月=本月1号0点（北京时间）
+  return Object.values(g.wrongBook||{}).filter(function(x){
+    if(!x || isDiagnosticBook(x.book||"")) return false;   // 排除连通测试探针
+    if(x.book && x.book !== g.book) return false;           // ★ 与错词本(renderWrong)统一：仅当前册
+    return (x.updated||0) >= since;                          // ★ 落在对应时间窗口内
+  });
+}
+
 function updatePeriodFix(){
-  // 只统计当前课本（及单元）范围内的错词
-  var wc = Object.values(g.wrongBook).filter(function(x){
-    if(x.book && x.book !== g.book) return false;
-    if(g.unit !== "__all" && x.unit && x.unit !== g.unit) return false;
-    return true;
-  });
-  var fixed = wc.filter(function(x){ return x.fixed; }).length;
+  // 改错统计：日/周/月 = 当前册 ∩ 对应时间窗口（用户定稿规则）
   var mode = g.rangeMode||"day";
-  // 与听写统计/图表共用同一自然周期起点(日=今日0点/周=本周一0点/月=本月1号0点)，
-  // 杜绝改错统计仍用「now-N天」滑动窗口导致日模式混入昨天/上月
-  var since = getRangeStartTs(mode);
-  var err=0, fx=0, todayFix=0;
-  var todayStart = new Date(); todayStart.setHours(0,0,0,0);
-  wc.forEach(function(x){
-    var up = x.updated||0;
-    if(up >= since){ err++; if(x.fixed) fx++; }
-    if(x.fixed && up >= todayStart.getTime()) todayFix++;
-  });
-  if(err===0 && wc.length>0){ err=wc.length; fx=fixed; }
-  else if(wc.length===0){ err=0; fx=0; }
+  var scoped = getWrongInScope(mode);        // 当前册 ∩ 时间窗口内的全部错词（含已改正）
+  var err = scoped.length;                   // 该窗口内错词总数
+  var fx  = scoped.filter(function(x){ return x.fixed; }).length;  // 已改正数
+  // 今日改正：仅「今日」窗口内的已改正（用于「今日改错」卡片项）
+  var todayScoped = getWrongInScope("day");
+  var todayFix = todayScoped.filter(function(x){ return x.fixed; }).length;
   document.getElementById("pError").textContent = err;
   document.getElementById("pFixed").textContent = fx;
   document.getElementById("pUnfix").textContent = err - fx;
   document.getElementById("pTodayFix").textContent = todayFix;
   document.getElementById("pFixRate").textContent = err ? Math.round(100*fx/err)+"%" : "0%";
-  // 月错误量：统计本月新增的错词（updated 在本月内的未改正错词）
-  var now2 = new Date();
-  var mStart = new Date(now2.getFullYear(), now2.getMonth(), 1).getTime();
-  var mEnd = new Date(now2.getFullYear(), now2.getMonth()+1, 1).getTime()-1;
-  var monthErrCount = 0;
-  wc.forEach(function(x){
-    var up = x.updated||0;
-    if(up >= mStart && up <= mEnd && !x.fixed) monthErrCount++;
-  });
+  // 月错误量：本月(北京时间自然月)内的错词（= 当前册 ∩ 本月窗口），与错词本同源
+  var monthScoped = getWrongInScope("month");
+  var monthErrCount = monthScoped.filter(function(x){ return !x.fixed; }).length;
   var elPME = document.getElementById("pMonthError");
   if(elPME){ elPME.textContent = monthErrCount; }
 }
-// 当前日期字符串（YYYY-MM-DD），与 g.stats 键保持一致：全部采用 UTC，
-// 避免本地时区与 toISOString 在跨零点时产生一天偏差
+// 当前日期字符串（YYYY-MM-DD）：总则规定时间标准为【北京时间 UTC+8】。
+// g.stats 的日期键由 todayStr()(UTC+8) 写入，本函数供读取/聚合时生成同一套键，
+// 必须与 todayStr 同源，杜绝"写入北京时间、读取 UTC"的零点漂移。
 function todayYMD(){
-  var n = new Date();
-  return n.getUTCFullYear()+"-"+
-    String(n.getUTCMonth()+1).padStart(2,"0")+"-"+
-    String(n.getUTCDate()).padStart(2,"0");
+  var d = new Date();
+  var bj = new Date(d.getTime()+d.getTimezoneOffset()*60000+8*3600000);
+  return bj.getUTCFullYear()+"-"+
+    String(bj.getUTCMonth()+1).padStart(2,"0")+"-"+
+    String(bj.getUTCDate()).padStart(2,"0");
 }
 
-// 当前「月」前缀（YYYY-MM，UTC），用于按月筛选
+// 当前「月」前缀（YYYY-MM，北京时间），用于按月筛选
 function currentMonthPrefix(){
-  var n = new Date();
-  return n.getUTCFullYear()+"-"+
-    String(n.getUTCMonth()+1).padStart(2,"0");
+  var d = new Date();
+  var bj = new Date(d.getTime()+d.getTimezoneOffset()*60000+8*3600000);
+  return bj.getUTCFullYear()+"-"+
+    String(bj.getUTCMonth()+1).padStart(2,"0");
 }
 
 // 当前所选时段(日/周/月)覆盖的日期列表（含当日），全部 UTC，与 g.stats 键同源
 function getRangeDates(mode){
   mode = mode || g.rangeMode || "day";
+  // 总则：日/周/月均为【自然日/自然周/自然月】，时间标准为北京时间(UTC+8)。
+  // 所有边界均取「北京当天 00:00」对应的日期键，与 g.stats 写入键(todayStr, 北京时间)同源。
   var now = new Date();
   var out = [];
   if(mode === "day"){
-    out.push(todayYMD());                       // 当日（严格对应「日显示当日」）
+    out.push(todayYMD());                       // 当日（北京时间）
   } else if(mode === "week"){
-    var monday = new Date(now);                 // 本周一 0 点(UTC) ~ 周日，自然周
-    monday.setUTCHours(0,0,0,0);
-    var dow = monday.getUTCDay();               // 0=周日 … 6=周六
-    var off = (dow+6)%7;                        // 距本周一的偏移天数
-    monday.setTime(monday.getTime() - off*86400000);
+    // 自然周 = 周一起点(北京时间) ~ 周日，共 7 天
+    // 星期取自「北京当天 00:00」，与总则"北京时间"一致（原 getUTCDay 取的是 UTC 星期，会偏移）
+    var todayBJ = (function(){
+      var d = new Date();
+      return new Date(d.getTime() + d.getTimezoneOffset()*60000 + 8*3600000);
+    })();
+    var dowBJ = todayBJ.getUTCDay();            // 0=周日 … 6=周六（此时 UTC 值 == 北京值）
+    var off = (dowBJ+6)%7;                      // 距本周一的偏移天数
+    var monday = new Date(todayBJ.getTime() - off*86400000);  // 显式声明，避免隐式全局
     for(var i=0; i<7; i++){
       var dw = new Date(monday.getTime()+i*86400000);
-      out.push(dw.toISOString().slice(0,10));
+      out.push(dw.toISOString().slice(0,10));   // 产出 YYYY-MM-DD 日期键
     }
-  } else {                                       // 本月 1 号 ~ 当日（UTC）
+  } else {                                       // 本月 1 号 ~ 当日（北京时间自然月）
     var prefix = currentMonthPrefix();
     Object.keys(g.stats||{}).forEach(function(k){
       if(isStatsDateKey(k) && k.slice(0,7) === prefix) out.push(k);
@@ -11235,18 +11662,32 @@ function dateLabel(ds){
 }
 
 // 按当前所选时段(日/周/月)聚合「各册」的正确/错误数 → {册名:{c,w}}
+// 诊断/连通测试探针册名判断：连通测试只在「⚙️设置 → 连通测试」内使用，
+// 其探针数据(book 形如 "__diag__" / 含"连通测试")不得污染正常统计的分册明细。
+function isDiagnosticBook(name){
+  if(!name) return false;
+  return /连通测试|__diag__|^__/.test(name);
+}
+
+// 分册明细（仅用于「分册明细」区块）：按当前所选时段(日/周/月)聚合「各册」正确/错误数。
+// = 对应时间各分册听写总量；次日0点随今日桶物理删除而自动归0。
+// 连通测试等诊断探针册永不计入（isDiagnosticBook 双重过滤）。
+//
+// ★ v14：本函数遍历时段内全部册并「按册分组」返回 {册名:{c,w}}。
+//   「听写统计·日/周/月总量」由 updatePeriodStats()/renderChart() 通过
+//   getAllBooksStats() 计算（不分册、全册之和）。
+//   两者对同一时段、同一 byUnit 求和，必然满足「顶部总量 ≡ Σ分册明细」恒成立——
+//   这是数学恒等式，已在 renderChart / updatePeriodStats 处以运行时断言自检。
+//   若改动任一聚合函数，须同步保证该恒等式不被破坏。
 function aggregateByBook(mode){
   mode = mode || g.rangeMode || "day";
   var map = {};
   getRangeDates(mode).forEach(function(ds){
     var st = g.stats[ds]; if(!st||!st.byUnit) return;
     Object.keys(st.byUnit).forEach(function(uKey){
-      // 【诊断隔离·渲染防线】连通测试(写云端)的探针键形如 "__diag__|probe"、
-      // "__连通测试_<时间戳>|probe"，其 book 段 = "__diag__"/"__连通测试_xxx"，
-      // 若不拦截会作为「分册」行渲染到「分册明细」表格（即页面上出现的红框条目）。
-      // 此处用单一判定入口 isDiagKey 过滤，与 syncPull / normalizeBuckets 保持一致。
-      if(isDiagKey(uKey)) return;
       var book = (uKey.split("|")[0]) || g.book;
+      if(isDiagnosticBook(book)) return;          // ① 过滤连通测试探针册
+      if(/连通测试|探针|__diag__/.test(uKey)) return;  // ② 兜底：key 整体含探针字样
       var val = st.byUnit[uKey] || {c:0,w:0};
       if(!map[book]) map[book] = {c:0,w:0};
       map[book].c += (val.c||0);
@@ -11264,54 +11705,91 @@ function renderChart(){
   var items = [];
   var totalC = 0, totalW = 0;
 
-  // ① 按时段分桶（用于「每日/每周/每月 蓝对红错」数字列表）
+  // ① 按时段分桶（不分册——总量统计时段内全部册，与分册明细之和 ≡ 总量）
   getRangeDates(mode).forEach(function(ds){
-    var s = getScopedStats(g.stats[ds], g.book, g.unit);
+    var s = getAllBooksStats(g.stats[ds]);   // ← 不分册（原为 getScopedStats 仅当前册）
     items.push({label:dateLabel(ds), c:s.c, w:s.w});
     totalC += s.c; totalW += s.w;
   });
 
-  // ② 每日/每周/每月 柱状图（图1 样式：上蓝下红，每列 蓝对在上、红错在下 + 比例柱 + 日期 + 图例）
-  var maxVal = 1;
-  items.forEach(function(it){ if(it.c>maxVal)maxVal=it.c; if(it.w>maxVal)maxVal=it.w; });
-  var html = '<div style="overflow-x:auto"><div class="chart-grid" style="align-items:flex-end;min-height:152px;min-width:'+(items.length*40)+'px">';
-  if(items.length===0 || (totalC===0 && totalW===0)){
-    html += '<div class="bd-empty" style="min-width:100%">本时段暂无听写记录</div>';
-  } else {
-    items.forEach(function(it){
-      var hc = Math.round(it.c/maxVal*100), hw = Math.round(it.w/maxVal*100);
-      html += '<div class="chart-day" style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;max-width:none;min-width:34px">'
-        +'<div class="chart-num chart-correct" style="font-size:13px">'+it.c+'</div>'
-        +'<div class="chart-num chart-wrong" style="font-size:13px">'+it.w+'</div>'
-        +'<div style="width:100%;height:96px;display:flex;align-items:flex-end;gap:2px;margin:3px 0">'
-          +'<div style="flex:1;height:'+hc+'%;background:linear-gradient(0deg,#3b82f6,#60a5fa);border-radius:3px 3px 0 0;min-height:'+(it.c>0?2:0)+'px"></div>'
-          +'<div style="flex:1;height:'+hw+'%;background:linear-gradient(0deg,#ef4444,#f87171);border-radius:3px 3px 0 0;min-height:'+(it.w>0?2:0)+'px"></div>'
-        +'</div>'
-        +'<div class="chart-date">'+it.label+'</div>'
-      +'</div>';
-    });
-  }
-  html += '</div></div>';
-  html += '<div class="chart-legend"><span><span class="dot blue"></span>正确 <b>'+totalC+'</b></span><span><span class="dot red"></span>错误 <b>'+totalW+'</b></span></div>';
+  var html = '';
 
-  // ③ 分册明细（最下方，随日/周/月变化，只列该时段有听写的册）— 表格形式，保持不变
-  var bd = aggregateByBook(mode);
-  var modeText = mode==="day"?"当日":mode==="week"?"本周":"本月";
-  html += '<div class="breakdown">'+
-    '<h4>分册明细 · '+modeText+'</h4>';
-  var books = Object.keys(bd).filter(function(bk){ return bd[bk].c>0 || bd[bk].w>0; });
-  if(books.length===0){
-    html += '<div class="bd-empty">本'+modeText+'无分册听写数据</div>';
+  if(mode === "day"){
+    // ===== ② 日模式：去掉与主比例条重复的「总计横条」（红框部分），仅保留文字表格 =====
+    //    「听写统计」主比例条已在 renderStats 中渲染；此处不再重复画柱，避免"第二个柱状图"。
+    //    保留：时间 | 正确 | 错误 | 总计 表格（用户定稿：听写统计·日 = 当日总量不分册）
+    var sumTotal = totalC + totalW;
+    html += '<div class="bd-table" style="margin-top:2px">'
+      + '<table style="width:100%;border-collapse:collapse;font-size:13px">'
+      + '<thead><tr style="color:#64748b;text-align:left">'
+        + '<th style="padding:6px 8px">时间</th>'
+        + '<th style="padding:6px 8px">正确</th>'
+        + '<th style="padding:6px 8px">错误</th>'
+        + '<th style="padding:6px 8px;text-align:right">总计</th>'
+      + '</tr></thead>'
+      + '<tbody><tr style="border-top:1px solid #eef2f7">'
+        + '<td style="padding:6px 8px">'+todayYMD()+'</td>'
+        + '<td class="bd-c" style="padding:6px 8px;color:#3b82f6">'+totalC+'</td>'
+        + '<td class="bd-w" style="padding:6px 8px;color:#ef4444">'+totalW+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;font-weight:600;color:#1e3a5f">'+sumTotal+'</td>'
+      + '</tr></tbody>'
+      + '</table></div>';
   } else {
-    // 按该时段听写总量降序，多的在前
-    books.sort(function(a,b){ return (bd[b].c+bd[b].w)-(bd[a].c+bd[a].w); });
-    html += '<table class="bd-table"><thead><tr><th>分册</th><th>正确</th><th>错误</th></tr></thead><tbody>';
-    books.forEach(function(bk){
-      html += '<tr><td>'+escapeHtml(bk)+'</td><td class="bd-c">'+bd[bk].c+'</td><td class="bd-w">'+bd[bk].w+'</td></tr>';
-    });
-    html += '</tbody></table>';
+    // ===== 周 / 月：保持原有竖向柱状图不变 =====
+    var maxVal = 1;
+    items.forEach(function(it){ if(it.c>maxVal)maxVal=it.c; if(it.w>maxVal)maxVal=it.w; });
+    html += '<div style="overflow-x:auto"><div class="chart-grid" style="align-items:flex-end;min-height:152px;min-width:'+(items.length*40)+'px">';
+    if(items.length===0 || (totalC===0 && totalW===0)){
+      html += '<div class="bd-empty" style="min-width:100%">本时段暂无听写记录</div>';
+    } else {
+      items.forEach(function(it){
+        var hc = Math.round(it.c/maxVal*100), hw = Math.round(it.w/maxVal*100);
+        html += '<div class="chart-day" style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;max-width:none;min-width:34px">'
+          +'<div class="chart-num chart-correct" style="font-size:13px">'+it.c+'</div>'
+          +'<div class="chart-num chart-wrong" style="font-size:13px">'+it.w+'</div>'
+          +'<div style="width:100%;height:96px;display:flex;align-items:flex-end;gap:2px;margin:3px 0">'
+            +'<div style="flex:1;height:'+hc+'%;background:linear-gradient(0deg,#3b82f6,#60a5fa);border-radius:3px 3px 0 0;min-height:'+(it.c>0?2:0)+'px"></div>'
+            +'<div style="flex:1;height:'+hw+'%;background:linear-gradient(0deg,#ef4444,#f87171);border-radius:3px 3px 0 0;min-height:'+(it.w>0?2:0)+'px"></div>'
+          +'</div>'
+          +'<div class="chart-date">'+it.label+'</div>'
+        +'</div>';
+      });
+    }
+    html += '</div></div>';
+    html += '<div class="chart-legend"><span><span class="dot blue"></span>正确 <b>'+totalC+'</b></span><span><span class="dot red"></span>错误 <b>'+totalW+'</b></span></div>';
   }
-  html += '</div>';
+
+  // ③ 分册明细：日/周/月均展示「分册 → 分册听写总量」（用户定稿：分册明细顶显示当日周月分册明细）。
+  //    顶部「听写统计总量」不分册；下方「分册明细」按册拆分，二者之和 ≡ 总量。
+  //    次日0点随今日桶物理删除而归0。
+  {
+    var bd = aggregateByBook(mode);
+    // ★ v14 恒等式自检（待办2 兜底，防止口径回退）：
+    //   顶部总量(totalC+totalW，来自 getAllBooksStats=时段内全册之和)
+    //   ≡ 分册明细之和(Σbd)。二者应恒等；失配说明 updatePeriodStats/renderChart 与
+    //   aggregateByBook 的聚合口径不再一致，需立即排查（仅 console 报警，不影响渲染）。
+    var sumDetail = 0;
+    Object.keys(bd).forEach(function(bk){ sumDetail += (bd[bk].c||0) + (bd[bk].w||0); });
+    if((totalC+totalW) !== sumDetail){
+      console.warn("[恒等式失配] 顶部总量("+(totalC+totalW)+") ≠ 分册明细之和("+sumDetail+") mode="+mode);
+    }
+    var modeText = mode==="day"?"当日":mode==="week"?"本周":"本月";
+    html += '<div class="breakdown">'+
+      '<h4>分册明细 · '+modeText+'</h4>';
+    var books = Object.keys(bd).filter(function(bk){ return bd[bk].c>0 || bd[bk].w>0; });
+    if(books.length===0){
+      html += '<div class="bd-empty">本'+modeText+'无分册听写数据</div>';
+    } else {
+      books.sort(function(a,b){ return (bd[b].c+bd[b].w)-(bd[a].c+bd[a].w); });
+      html += '<table class="bd-table"><thead><tr><th>分册</th><th>正确</th><th>错误</th><th>总量</th></tr></thead><tbody>';
+      books.forEach(function(bk){
+        var tot = bd[bk].c + bd[bk].w;
+        html += '<tr><td>'+escapeHtml(bk)+'</td><td class="bd-c">'+bd[bk].c+'</td><td class="bd-w">'+bd[bk].w+'</td><td style="font-weight:600;color:#1e3a5f">'+tot+'</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+  }
   box.innerHTML = html;
 }
 // 高亮显示错误单词中的错误部分，并与正确答案对比
@@ -11358,9 +11836,10 @@ function highlightWrongInput(wrongInput, correctWord){
 function renderWrong(){
   var ul = document.getElementById("wrongList");
   ul.innerHTML = "";
-  // 按当前课本/单元筛选
+  // 按当前课本/单元筛选；同时彻底排除「连通测试」等诊断探针错词
   var filtered = Object.entries(g.wrongBook).filter(function(p){
     var v = p[1];
+    if(isDiagnosticBook(p[0]) || isDiagnosticBook(v.book||"")) return false;
     if(v.book && v.book !== g.book) return false;
     if(g.unit !== "__all" && v.unit && v.unit !== g.unit) return false;
     return true;
@@ -11798,8 +12277,6 @@ async function syncPush(manual){
     // 2) wrong_words
     var wrongRows = [];
     Object.keys(g.wrongBook||{}).forEach(function(w){
-      // 【诊断隔离】绝不把连通测试的探针错词上传到云端（双向：拉取已过滤，推送也过滤）
-      if(/^__连通测试_|^__diag__/.test(String(w||""))){ return; }
       var wd = g.wrongBook[w];
       wrongRows.push({
         user_id:uid, word:w,
@@ -11893,15 +12370,13 @@ async function syncPull(manual){
     if(r1.data && r1.data.length>0){
       var touchedDates = {};
       r1.data.forEach(function(r){
-        // 【诊断隔离】连通测试(写云端)会向 vocab_progress 写入探针行（book="__diag__"、
-        // word 形如 "__连通测试_<时间戳>" / "__连通测试_wrong_<时间戳>"），此类数据纯属诊断用途，
-        // 绝不能进入听写统计。此处一律丢弃，保证「今日总量/今日正确率/月听写量」等口径不被污染。
-        var _diagWord = String(r.word||"");
-        if(/^__连通测试_|^__diag__/.test(_diagWord) || String(r.book||"")==="__diag__"){
-          return;
-        }
+        // 🔒 过滤「连通测试」等诊断探针行（book 含 连通测试 / __diag__ / 以 __ 开头），
+        // 它们只用于云端连通性诊断，绝不可进入正常统计的分册明细 / 错词本。
+        var rBook = String(r.book||"");
+        var rWord = String(r.word||"");
+        if(isDiagnosticBook(rBook) || isDiagnosticBook(rWord)) return;
         // 解析 word 列：新版形如 "课本|单元|日期"，旧版形如 "课本|单元"
-        var wParts = _diagWord.split("|");
+        var wParts = rWord.split("|");
         var dateKey = "";
         if(wParts.length>=3 && isStatsDateKey(wParts[wParts.length-1])){
           dateKey = wParts.pop();
@@ -11909,7 +12384,7 @@ async function syncPull(manual){
           dateKey = String(r.last_practiced||"").slice(0,10);
         }
         if(!isStatsDateKey(dateKey)) dateKey = new Date().toISOString().slice(0,10);
-        var uk = wParts.join("|") || statsKey(String(r.book||g.book), String(r.unit||""));
+        var uk = wParts.join("|") || statsKey(rBook, String(r.unit||""));
         var bucket = getStatsBucket(dateKey);
         bucket.byUnit[uk] = bucket.byUnit[uk] || {c:0,w:0};
         // 取最大值合并：上传的是累计值，重复拉取不会叠加，且双方数据都不丢失
@@ -11933,10 +12408,10 @@ async function syncPull(manual){
     );
     if(r2.data && r2.data.length>0){
       r2.data.forEach(function(r){
-        // 【诊断隔离】连通测试的探针错词（word 形如 "__连通测试_wrong_<时间戳>"）不进错词本，
-        // 避免「改错统计 / 错词本」里出现诊断垃圾条目
-        if(/^__连通测试_|^__diag__/.test(String(r.word||""))){ return; }
-        if(!g.wrongBook[r.word]){ g.wrongBook[r.word]={count:0,fixed:false,updated:Date.now(),lastInput:"",meaning:"",phonetic:"",pos:""}; }
+        // 🔒 过滤诊断探针错词（如 __连通测试_wrong_xxx），不进入正常错词本
+        var rw = String(r.word||"");
+        if(isDiagnosticBook(rw) || isDiagnosticBook(String(r.book||""))) return;
+        if(!g.wrongBook[rw]){ g.wrongBook[rw]={count:0,fixed:false,updated:Date.now(),lastInput:"",meaning:"",phonetic:"",pos:""}; }
         if(r.wrong_count>g.wrongBook[r.word].count){ g.wrongBook[r.word].count=r.wrong_count; g.wrongBook[r.word].fixed=!!r.fixed; g.wrongBook[r.word].updated=Date.now(); if(r.last_input) g.wrongBook[r.word].lastInput=r.last_input; if(r.meaning) g.wrongBook[r.word].meaning=r.meaning; if(r.phonetic) g.wrongBook[r.word].phonetic=r.phonetic; if(r.pos) g.wrongBook[r.word].pos=r.pos; merged=true; }
       });
     }
@@ -11965,15 +12440,22 @@ async function syncPull(manual){
         var _dw = (typeof latest.session_wrong==="number") ? latest.session_wrong - g.wrong : 0;
         if(typeof latest.session_correct==="number"){ g.correct = latest.session_correct; merged=true; }
         if(typeof latest.session_wrong==="number"){ g.wrong = latest.session_wrong; merged=true; }
-        if(_dc>0 || _dw>0){
-          var _bb = getStatsBucket(todayStr());
+        // ★ v16：与 checkAnswer 统一 —— 仅「今日真实作答」才写入今日桶，
+        //   避免云端覆盖绕过守护导致「本次>今日」倒挂（根因B）。
+        var _todayNow = todayStr();
+        var _isTodayWrite = (g._todayWritten === _todayNow);
+        if((_dc>0 || _dw>0) && _isTodayWrite){
+          var _bb = getStatsBucket(_todayNow);
           var _uu = statsKey(g.book, g.unit);
           _bb.byUnit[_uu] = _bb.byUnit[_uu] || {c:0,w:0};
           if(_dc>0){ _bb.c += _dc; _bb.byUnit[_uu].c += _dc; }
           if(_dw>0){ _bb.w += _dw; _bb.byUnit[_uu].w += _dw; }
+        } else if(_dc>0 || _dw>0){
+          console.info("[syncPull] 云端会话计数未归入今日桶（非今日作答，已丢弃以避免倒挂）");
         }
         g._sessionUpdatedAt = cloudTs;
         g._sessionDate = todayStr(); // 云端同步的会话计数视为当天，锚定到本地今天，避免跨日倒挂
+        g._todayWritten = todayStr();   // 同步还原也视为「今日真实作答」，守护今日桶归属
       }
       // 恢复 masteredWords（取最新一条记录中的 JSON）
       if(latest.mastered_words){
@@ -12034,8 +12516,23 @@ function saveIntervalConfig(){
   }catch(e){}
   // 重启周期定时器，使新间隔立即生效（无需刷新页面）
   if(typeof startAutoSyncTimer === "function") startAutoSyncTimer();
+  validateIntervals();
   toast("间隔已保存：每 "+pv+" 秒上传 / 每 "+qv+" 秒下载 ✅");
 }
+
+// 重置为默认：上传 30 秒 / 下载 15 秒 —— 回填 + 校验 + 自动保存 + 重启定时器
+function resetIntervalDefaults(){
+  var p = document.getElementById("autoPushInterval");
+  var q = document.getElementById("autoPullInterval");
+  var a = document.getElementById("autoUploadOnLogin");
+  if(p) p.value = 30;
+  if(q) q.value = 15;
+  if(a) a.checked = true;
+  validateIntervals();
+  saveIntervalConfig(); // 复用保存逻辑：写 localStorage + g + 重启定时器
+  toast("已重置为默认：每 30 秒上传 / 每 15 秒下载 ↺");
+}
+window.resetIntervalDefaults = resetIntervalDefaults;
 
 function saveSupaConfig(){
   g.supaUrl = document.getElementById("supaUrl").value.trim();
@@ -12308,12 +12805,8 @@ async function dispatchPush(manual) {
 async function dispatchPull(manual) {
   var b = (g.syncBackend || "supabase");
   if (b === "supabase" || b === "dual") {
-    // dual 模式：Supabase 是唯一实时真相源；GitHub 归档按需自动收敛（只读合并，永不对写）
+    // dual 模式：Supabase 是唯一实时真相源；GitHub 只归档，按需通过「从 GitHub 恢复归档」拉取
     try { await syncPull(manual); } catch (e) {}
-    // 缺口1：双写并存时，每次 pull 同步从 GitHub 归档拉取并合并，实现多渠道自动恢复
-    if (b === "dual" && GitHubProvider && GitHubProvider.isConfigured()) {
-      try { await GitHubProvider.pull(false); } catch (e) {}
-    }
   } else if (b === "github") {
     try { await GitHubProvider.pull(manual); } catch (e) {}
   }
@@ -12380,12 +12873,6 @@ function setupSyncBackend() {
     if (acts && g.ghRepo) acts.href = "https://github.com/" + g.ghRepo + "/actions";
     setGhStatus("配置已保存", "ok");
     toast("GitHub 配置已保存 ✅");
-    // 缺口3：保存即生效 —— 配置就绪后自动连通测试 + 首次归档上传，无需手动点
-    if (GitHubProvider && GitHubProvider.isConfigured()) {
-      GitHubProvider.test().then(function () {
-        try { GitHubProvider.push(true); } catch (e) {}
-      }).catch(function () {});
-    }
   };
   var ghSyncEl = document.getElementById("ghSync");
   if (ghSyncEl) ghSyncEl.onclick = function () { GitHubProvider.push(true); };
@@ -12646,6 +13133,44 @@ function renderBackupList(){
     lastTs.textContent = last ? "最近备份：" + formatBackupLabel(last) : "尚未自动备份";
   }
 }
+// ===== 遍数历史（v8）：渲染每一遍的本地归档快照（不上云）=====
+// 每听完一册，advanceBookPass 清0「前」调用 createPassArchive 落地一份快照到 g.passArchive；
+// 此处按册过滤、倒序展示，正确率分色；提供「还原上一遍」入口（以账本为准重建）。
+function renderPassHistory(){
+  var box = document.getElementById("passHistoryList");
+  var cnt = document.getElementById("passHistoryCount");
+  if(!box) return;
+  var curBook = g.book;
+  var list = (Array.isArray(g.passArchive)?g.passArchive:[])
+    .filter(function(a){ return a && a.book === curBook; })
+    .slice().sort(function(a,b){ return (b.passNo||0)-(a.passNo||0); });   // 最新一遍在前
+  if(cnt) cnt.textContent = list.length ? ("共 "+list.length+" 遍") : "";
+  if(list.length===0){
+    box.innerHTML = '<div class="pass-history-empty">本册尚未完成过一遍 · 完成后清0前会自动本地归档（不上云）</div>';
+    return;
+  }
+  box.innerHTML = "";
+  list.forEach(function(a){
+    var rate = a.rate||0;
+    var rateCls = rate>=80?"hi" : rate>=60?"mid" : "lo";
+    var row = document.createElement("div");
+    row.className = "pass-history-item";
+    row.innerHTML =
+      '<div class="ph-left">'+
+        '<span class="ph-book">'+escapeHtml(a.book||"")+' · 第 '+a.passNo+' 遍</span>'+
+        '<span class="ph-date">完成于 '+escapeHtml(a.doneDate||"")+'</span>'+
+      '</div>'+
+      '<div class="ph-right">'+
+        '<div>已听 '+a.totalHeard+'/'+a.cap+' · 错 '+a.totalWrong+'</div>'+
+        '<div class="ph-rate '+rateCls+'">正确率 '+rate+'%</div>'+
+      '</div>';
+    box.appendChild(row);
+  });
+}
+// XSS 兜底（同域可控内容亦做转义，避免书名/日期含特殊字符破坏结构）
+function escapeHtml(s){
+  return String(s==null?"":s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; });
+}
 // 从指定备份恢复数据
 function restoreFromBackup(ts){
   var b, fromLabel;
@@ -12697,13 +13222,15 @@ function checkLegacyData(){
 }
 
 // ===== 保存状态（含自动备份）=====
-function saveState(){
+function saveState(){/* v17 (账本常绿) : 写前校验——累计字段相对 stats 桶失配时纠回正确值并打印调用栈，阻断脏写 */(function(){  try{    var _c=0,_w=0;    Object.keys(g.stats||{}).forEach(function(k){      if(!isStatsDateKey(k)) return;      var st=g.stats[k]; if(!st||!st.byUnit) return;      Object.keys(st.byUnit).forEach(function(uk){        var bk=(uk.split("|")[0])||"";        if(isDiagnosticBook(bk)) return;        _c+=(st.byUnit[uk].c||0); _w+=(st.byUnit[uk].w||0);      });    });    if(g.totalCorrect!==_c || g.totalWrong!==_w){      console.error("[v17 写前拦截] 累计漂移: totalCorrect="+g.totalCorrect+"(应"+_c+"), totalWrong="+g.totalWrong+"(应"+_w+")", new Error().stack);      g.totalCorrect=_c; g.totalWrong=_w;    }  }catch(e){}})();
   try{
     normalizeBuckets();        // 先修平历史漂移
     recomputeTotals();         // 再让 totalCorrect/totalWrong = 账本之和（死账）
     g.dataVersion = (g.dataVersion||0) + 1;   // 每次保存版本号 +1（单调递增，冲突检测核心）
     g.updatedAt = Date.now();
     var s = {book:g.book, unit:g.unit, idx:g.idx, correct:g.correct, wrong:g.wrong, _sessionUpdatedAt:g._sessionUpdatedAt, _sessionDate:g._sessionDate||todayStr(), totalCorrect:g.totalCorrect, totalWrong:g.totalWrong, wrongBook:g.wrongBook, stats:g.stats, masteredWords:g.masteredWords, monthlyTotals:g.monthlyTotals||{}, mode:g.mode, version:2,
+      // 遍数追踪（v8）：与云端备份解耦，纯本地；passArchive 为每一遍的本地归档快照（不上云）
+      passCount: g.passCount||{}, bookCompletedDate: g.bookCompletedDate||{}, passArchive: Array.isArray(g.passArchive)?g.passArchive:[],
       // 数据版本号与时间戳随状态一起持久化，导入时可据此判断是否回退
       dataVersion: g.dataVersion, updatedAt: g.updatedAt, deviceId: g.deviceId};
     localStorage.setItem("vocab_state", JSON.stringify(s));
