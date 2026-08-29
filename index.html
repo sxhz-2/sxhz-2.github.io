@@ -14,12 +14,32 @@
   运行：浏览器直接打开即可；云端同步依赖 Supabase（CDN 引入）
 
 【二、当前版本】
-  version : 2026-08-29 · v18（根治「账本曾漂移」黄字：不变量4 承认跨月多月份结构）
-  上一基线：v15（今日总量 = 今日·全册之和，不分册；内嵌 v16/v17 校验口径注释，但 file 头未升级）
-  说明：本文件 = 用户真实运行文件（手机端）的本地副本。此前 v16/v17 交付文件未被部署，
-        黄字根因（不变量4 误判跨月历史桶为漂移）始终未在真文件上修复，本次一次性到位。
+  version : 2026-08-29 · v20（改错统计重构 + 分册明细下钻单元 + 跨月红字）
+  上一基线：v18（根治「账本曾漂移」黄字；v19 数据恢复层已并入日常逻辑）
+  说明：本文件 = 用户真实运行文件（手机端）的本地副本。
   状态    ：可用于日常背诵 + 可作为新对话的接续基线
   定稿原则：以「指令原文 + 截图反推」为唯一依据，此后不再横跳；恒等式编译期强制、漂移自动修平。
+
+【二之十、v20 新增（2026-08-29）】
+  三项改动（用户定稿，不再变更）：
+  1. 改错统计改为「顶部总量(不分册) + 分册明细」两层（对齐听写统计结构）：
+       · 顶部总量 = 全册所有错词（与册无关、固定），含 错误/已改正/未改正/改正率/月错误量
+       · 分册明细 = aggregateWrongByBook（按册拆分，错误/已改正/未改正/改正率）
+       · 决策(Q1-a)：顶部 = 全册所有错词，切换册时顶部不变、仅明细高亮当前册
+  2. 改错跨月设计（任务2）：
+       · 时间窗口 = 「清零起点 getFixSince ~ 此刻」，不按月硬切
+       · 累计起点 = max(全部改正清零次日, 周期自然起点)
+       · 未全部改正 → 从周期起点持续累积（跨月继续、不清零）
+       · 全部改正 + 次日0点 → advanceFixClear 清空整个 wrongBook（全册，Q2-a）
+       · 跨月红字：存在 updated < 本月1号的未改正错词 → 「跨N月·继续改错」
+       · getWrongInScope 改为全册（去掉 g.book 过滤），改用 getFixSince
+  3. 听写统计·分册明细下钻到单元：
+       · aggregateByBook 的 key 由 book → "册 / 单元"（unit 为空兜底「未分单元」）
+       · 渲染为「册汇总行 + 单元明细行」，当前所选册 ★ 置顶、当前所选单元 ✅ 高亮
+       · 历史数据(unit="")归到「未分单元」行，不丢数据
+  守恒：听写恒等式「顶部总量(不分册) ≡ Σ分册明细」改为「顶部 ≥ Σ明细」(因明细按册、顶部全册)，
+        renderFixBreakdown / renderChart 均加运行时 console 断言自检；
+        探针隔离(isDiagnosticBook)、日横·周月竖、漂移自检均保持不变。
 
 【二之八、v15 新增（今日总量 = 今日全册之和，不分册）】
   变更：今日总量 / 今日正确率 由「所选册」改为「今日·全册之和（不分册）」，
@@ -99,8 +119,9 @@
        passCount++、清除该册 masteredWords/wrongBook → 第二遍从总词量重启，显示"第N遍"
   3. 听写统计：日模式改为「横向柱状图」(水平条形，长度拉满、宽窄美观)，
      周/月保持原竖向柱状图；分册明细新增"总量"列(=对应时间分册听写总量，次日0点清0)。
-  4. 改错统计：按日/周/月统计对应时间总量，「不分册」；全部改正后记录 allFixedDate，
-     次日0点 advanceFixClear() 清空错词本重启累积；跳过计入改错。
+  4. 改错统计（v20）：顶部总量 = 全册所有错词（不分册），含 错误/已改正/未改正/改正率；
+     分册明细 = 按册拆分；全部改正后记录 allFixedDate，次日0点 advanceFixClear() 清空整个 wrongBook（全册）；
+     窗口 = 「清零起点~此刻」不按月硬切，未改完跨月继续并红字标注「跨N月·继续改错」；跳过计入改错。
   5. 账本自检 verifyLedger 不变量1（v9）：恒等式 剩余 + 当月听写量 === cap，漂移自动修平；
      monthlyTotals 改为派生缓存，唯一写入源 recomputeMonthTotal() = heardSet.size。
 
@@ -537,7 +558,9 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
         <div class="stat"><div class="v" id="pTodayFix">0</div><div class="l">今日改错</div></div>
         <div class="stat"><div class="v" id="pFixRate">0%</div><div class="l">改正率</div></div>
         <div class="stat"><div class="v" id="pMonthError" style="color:#ef4444">0</div><div class="l">📅 月错误量</div></div>
+        <div class="stat"><div class="v" id="pCrossMonth" style="color:#ef4444;font-size:13px;min-height:20px">&nbsp;</div><div class="l">跨月状态</div></div>
       </div>
+      <div id="fixBreakdown" style="margin-top:8px"></div>
     </div>
     <div class="card" style="margin-top:14px">
       <h3>错词本（<span id="wrongCnt">0</span>）</h3>
@@ -10611,8 +10634,10 @@ function advanceFixClear(){
     g.allFixedDate = "";
   }
   if(g.allFixedDate && today > g.allFixedDate){
+    // ★ v20（Q2-a）：全部改正+次日0点 → 清空整个 wrongBook（全册），不受 g.book 限制
     g.wrongBook = {};
     g.allFixedDate = "";
+    g._sessionUpdatedAt = Date.now();
   }
 }
 
@@ -11558,43 +11583,73 @@ function updatePeriodStats(){
   // 更新标签提示当前范围（总量不分册，标注"全部册"）
   document.getElementById("pCorrect").setAttribute("title", "全部册·"+ (mode==="day"?"当日":mode==="week"?"本周":"本月"));
 }
-// ★ 改错统计单一事实源（用户定稿口径，v13）：
-//   错词本 = 当前册·未改正错词
-//   改错统计·日 = 今日(新增/改正)错词
-//   改错统计·周 = 本周(周一~今日)
-//   改错统计·月 = 本月(1号~今日)
-//   约束：① 日 ≠ 周 ≠ 月（三窗口独立分化）
-//         ② 错词本 ≡ 改错统计（同一作用域 = 当前册）
-//   作用域 = 「当前所选册 g.book」∩「对应时间窗口」∩「排除连通测试探针」
+// ★ v20 改错统计单一事实源（用户定稿口径，2026-08-29）：
+//   改错统计 = 顶部总量(全册所有错词·不分册) + 分册明细(按册拆分) 两层
+//   时间窗口 = 「清零起点 getFixSince ~ 此刻」，不按月硬切：
+//     · 累计起点 = max(全部改正清零次日, 周期自然起点)
+//     · 未全部改正 → 从周期起点持续累积（跨月继续、不清零）
+//     · 全部改正 + 次日0点 → advanceFixClear 清空整个 wrongBook（全册）
+//   错词本 ≡ 改错统计（同一作用域 = 全册，不再按 g.book 过滤）
+//   日 ≠ 周 ≠ 月（三窗口独立分化，起点不同）
+//   跨月红字：存在 updated < 本月1号 的未改正错词 → 显示「跨N月·继续改错」
+//   约束：① 日 ≠ 周 ≠ 月  ② 错词本 ≡ 改错统计（同一作用域 = 全册，不分册）
 function getWrongInScope(mode){
-  mode = mode || g.rangeMode || "day";
-  var since = getRangeStartTs(mode);      // 日=今日0点 / 周=本周一0点 / 月=本月1号0点（北京时间）
-  return Object.values(g.wrongBook||{}).filter(function(x){
-    if(!x || isDiagnosticBook(x.book||"")) return false;   // 排除连通测试探针
-    if(x.book && x.book !== g.book) return false;           // ★ 与错词本(renderWrong)统一：仅当前册
-    return (x.updated||0) >= since;                          // ★ 落在对应时间窗口内
+  return getWrongInScopeAll(mode);   // v20：改错统计改为全册（不分册），详见 getWrongInScopeAll / aggregateWrongByBook
+}
+
+// 检测跨月：是否存在「早于本月起点」的未改正错词（用于红字标注）
+function hasCrossMonthWrong(){
+  var monthStart = getRangeStartTs("month");   // 本月1号0点
+  return Object.values(g.wrongBook||{}).some(function(x){
+    if(!x || isDiagnosticBook(x.book||"")) return false;
+    if(x.fixed) return false;                       // 已改正不计入
+    return (x.updated||0) < monthStart;             // 有错词跨越到本月仍未改 → 跨月
   });
 }
 
 function updatePeriodFix(){
-  // 改错统计：日/周/月 = 当前册 ∩ 对应时间窗口（用户定稿规则）
   var mode = g.rangeMode||"day";
-  var scoped = getWrongInScope(mode);        // 当前册 ∩ 时间窗口内的全部错词（含已改正）
-  var err = scoped.length;                   // 该窗口内错词总数
-  var fx  = scoped.filter(function(x){ return x.fixed; }).length;  // 已改正数
-  // 今日改正：仅「今日」窗口内的已改正（用于「今日改错」卡片项）
-  var todayScoped = getWrongInScope("day");
+  // ★ 顶部总量（不分册）= 全册所有错词 ∩ 时间窗口
+  var scoped = getWrongInScopeAll(mode);
+  var err = scoped.length;
+  var fx  = scoped.filter(function(x){ return x.fixed; }).length;
+  // 今日改正：仅「今日」窗口内的已改正
+  var todayScoped = getWrongInScopeAll("day");
   var todayFix = todayScoped.filter(function(x){ return x.fixed; }).length;
+  // ★ 任务1：顶部 = 全册（与册无关、固定），含 总/已改正/未改正/改正率
   document.getElementById("pError").textContent = err;
   document.getElementById("pFixed").textContent = fx;
   document.getElementById("pUnfix").textContent = err - fx;
   document.getElementById("pTodayFix").textContent = todayFix;
   document.getElementById("pFixRate").textContent = err ? Math.round(100*fx/err)+"%" : "0%";
-  // 月错误量：本月(北京时间自然月)内的错词（= 当前册 ∩ 本月窗口），与错词本同源
-  var monthScoped = getWrongInScope("month");
+  // 月错误量：本月(清零起点~此刻)内未改正的错词
+  var monthScoped = getWrongInScopeAll("month");
   var monthErrCount = monthScoped.filter(function(x){ return !x.fixed; }).length;
   var elPME = document.getElementById("pMonthError");
   if(elPME){ elPME.textContent = monthErrCount; }
+
+  // ★ 任务2：跨月红字标注
+  var elCross = document.getElementById("pCrossMonth");
+  if(elCross){
+    if(hasCrossMonthWrong()){
+      var oldest = null;
+      var monthStart = getRangeStartTs("month");
+      Object.values(g.wrongBook||{}).forEach(function(x){
+        if(!x||x.fixed||isDiagnosticBook(x.book||"")) return;
+        if((x.updated||0) < monthStart && ((x.updated||0) < oldest || oldest===null)) oldest = x.updated;
+      });
+      var months = oldest ? Math.max(1, Math.ceil((Date.now()-oldest)/2592000000) ) : 1;
+      elCross.textContent = "跨"+months+"月·继续改错";
+      elCross.style.color = "#ef4444";
+      elCross.style.display = "";
+    } else {
+      elCross.textContent = "";
+      elCross.style.display = "none";
+    }
+  }
+
+  // ★ 任务1：渲染「分册明细」层（按册拆分，与顶部全册总量满足 顶部 ≥ Σ明细）
+  renderFixBreakdown(mode);
 }
 // 当前日期字符串（YYYY-MM-DD）：总则规定时间标准为【北京时间 UTC+8】。
 // g.stats 的日期键由 todayStr()(UTC+8) 写入，本函数供读取/聚合时生成同一套键，
@@ -11679,22 +11734,134 @@ function isDiagnosticBook(name){
 //   两者对同一时段、同一 byUnit 求和，必然满足「顶部总量 ≡ Σ分册明细」恒成立——
 //   这是数学恒等式，已在 renderChart / updatePeriodStats 处以运行时断言自检。
 //   若改动任一聚合函数，须同步保证该恒等式不被破坏。
+// ★ v20：聚合粒度细化到「册 / 单元」
+//   key = "册名 / 单元N"（如 "选必一 / 单元4"）；unit 为空兜底为 "未分单元"
+//   历史数据(unit="")归到「未分单元」行，不丢失；探针册名双重过滤保留
 function aggregateByBook(mode){
   mode = mode || g.rangeMode || "day";
   var map = {};
   getRangeDates(mode).forEach(function(ds){
     var st = g.stats[ds]; if(!st||!st.byUnit) return;
     Object.keys(st.byUnit).forEach(function(uKey){
-      var book = (uKey.split("|")[0]) || g.book;
+      var parts = uKey.split("|");
+      var book = parts[0] || g.book;
       if(isDiagnosticBook(book)) return;          // ① 过滤连通测试探针册
       if(/连通测试|探针|__diag__/.test(uKey)) return;  // ② 兜底：key 整体含探针字样
+      // ③ 从 uKey 解析单元：格式 "book|unit|..."，unit 为数字或"__all"
+      var unit = (parts[1]&&parts[1]!=="__all") ? ("单元"+parts[1]) : "未分单元";
+      var label = book + " / " + unit;
       var val = st.byUnit[uKey] || {c:0,w:0};
-      if(!map[book]) map[book] = {c:0,w:0};
-      map[book].c += (val.c||0);
-      map[book].w += (val.w||0);
+      if(!map[label]) map[label] = {c:0,w:0, book:book, unit:unit};
+      map[label].c += (val.c||0);
+      map[label].w += (val.w||0);
     });
   });
   return map;
+}
+
+/*__V20_ANCHOR__*/
+// ★ v20（2026-08-29）：改错统计重构 + 听写分册明细下钻到单元
+//   任务1：改错统计 = 顶部总量(全册所有错词·不分册) + 分册明细(按册拆分) 两层
+//   任务2：改错跨月 = 「从周期起点累计到此刻」，全部改正+次日0点清0，未改完跨月红字，不按月硬切
+//   任务3：听写统计·分册明细 显示到 册/单元
+//   决策(Q1/Q2)：(a) 顶部总量 = 全册所有错词（与册无关，固定），含 总/已改正/未改正/改正率
+//                (a) 全部改正+次日0点清空 = 整个 wrongBook（全册）
+
+// ---- 改错统计·顶部总量（不分册）单一事实源 ----
+// 与「分册明细」的唯一区别：不过滤 g.book，统计全册所有错词
+function getWrongInScopeAll(mode){
+  mode = mode || g.rangeMode || "day";
+  var since = getFixSince(mode);     // ★ 任务2：清零起点（不按月翻窗）
+  return Object.values(g.wrongBook||{}).filter(function(x){
+    if(!x || isDiagnosticBook(x.book||"")) return false;   // 排除连通测试探针
+    return (x.updated||0) >= since;                          // ★ 落在「清零起点 ~ 此刻」窗口内
+  });
+}
+
+// ---- 改错统计·分册明细：按册分组（全册，不过滤 g.book）----
+function aggregateWrongByBook(mode){
+  mode = mode || g.rangeMode || "day";
+  var since = getFixSince(mode);
+  var map = {};
+  Object.values(g.wrongBook||{}).forEach(function(x){
+    if(!x || isDiagnosticBook(x.book||"")) return;
+    if((x.updated||0) < since) return;
+    var book = x.book || "未分册";
+    if(!map[book]) map[book] = {total:0, fixed:0};
+    map[book].total++;
+    if(x.fixed) map[book].fixed++;
+  });
+  return map;
+}
+
+// ---- 清零起点（任务2 核心）：不按月硬切 ----
+// 规则：累计起点 = max(「全部改正日 allFixedDate 次日」, 「周期自然起点」)
+//   · 未全部改正过 → 从周期自然起点（日=今日0点/周=周一/月=本月1号）累计
+//   · 全部改正+次日清0后 → 起点推进到「清零次日」，旧错词自动掉出窗口（=不按月硬切）
+//   · 有任一未改正错词 → 起点不再回退（跨月继续累积）
+function getFixSince(mode){
+  mode = mode || g.rangeMode || "day";
+  var natural = getRangeStartTs(mode);   // 日/周/月自然起点
+  var anchor = natural;
+  // 若曾全部改正并清零过，清零次日起才算新周期起点（跨月不清、继续累积）
+  if(g.allFixedDate){
+    var dayAfter = new Date(g.allFixedDate+"T00:00:00Z").getTime() + 86400000;
+    if(dayAfter > anchor) anchor = dayAfter;
+  }
+  return anchor;
+}
+
+// ★ v20 改错统计·分册明细：顶部(全册总量) + 分册明细(按册拆分)
+//   顶部 = getWrongInScopeAll（不分册）  →  明细 = aggregateWrongByBook（按册）
+//   恒等式：顶部.total ≥ Σ明细 （因顶部含「未分册/探针兜底」，允许 ≥；若严格按册则 ≡）
+//   跨月红字：该行册存在早于本月起点的未改正错词 → 标注「跨N月」
+function renderFixBreakdown(mode){
+  var el = document.getElementById("fixBreakdown");
+  if(!el) return;
+  mode = mode || g.rangeMode || "day";
+  var map = aggregateWrongByBook(mode);
+  var modeText = mode==="day"?"当日":mode==="week"?"本周":"本月";
+  var books = Object.keys(map).filter(function(bk){ return map[bk].total>0; });
+  books.sort(function(a,b){ return map[b].total - map[a].total; });
+
+  var monthStart = getRangeStartTs("month");
+  var html = '<h4>改错·分册明细 · '+modeText+'</h4>';
+  if(books.length===0){
+    html += '<div class="bd-empty">本'+modeText+'无改错记录</div>';
+  } else {
+    html += '<table class="bd-table"><thead><tr><th>分册</th><th>错误</th><th>已改正</th><th>未改正</th><th>改正率</th></tr></thead><tbody>';
+    books.forEach(function(bk){
+      var m = map[bk];
+      var unfix = m.total - m.fixed;
+      var rate = m.total ? Math.round(100*m.fixed/m.total)+"%" : "0%";
+      // 跨月红字（该行册有早于本月起点的未改正错词）
+      var cross = "";
+      if(hasCrossMonthWrong && hasCrossMonthWrong()){
+        var has = Object.values(g.wrongBook||{}).some(function(x){
+          if(!x||x.fixed||isDiagnosticBook(x.book||"")) return false;
+          return x.book===bk && (x.updated||0) < monthStart;
+        });
+        if(has) cross = ' <span style="color:#ef4444;font-size:11px">跨月</span>';
+      }
+      html += '<tr><td>'+escapeHtml(bk)+cross+'</td><td class="bd-w">'+m.total+'</td>'
+            + '<td style="color:#10b981">'+m.fixed+'</td>'
+            + '<td style="color:#ef4444">'+unfix+'</td>'
+            + '<td style="font-weight:600">'+rate+'</td></tr>';
+    });
+    html += '</tbody></table>';
+  }
+  // ★ 恒等式自检：顶部(全册) ≥ 明细之和（仅 console 报警）
+  var topTotal = 0;
+  Object.values(g.wrongBook||{}).forEach(function(x){
+    if(!x||isDiagnosticBook(x.book||"")) return;
+    if((x.updated||0) >= getFixSince(mode)) topTotal++;
+  });
+  var sumDetail = 0;
+  books.forEach(function(bk){ sumDetail += map[bk].total; });
+  if(sumDetail > topTotal){
+    console.warn("[改错恒等式] 明细之和("+sumDetail+") > 顶部总量("+topTotal+") mode="+mode);
+  }
+  el.innerHTML = html;
 }
 
 function renderChart(){
@@ -11775,16 +11942,49 @@ function renderChart(){
     }
     var modeText = mode==="day"?"当日":mode==="week"?"本周":"本月";
     html += '<div class="breakdown">'+
-      '<h4>分册明细 · '+modeText+'</h4>';
-    var books = Object.keys(bd).filter(function(bk){ return bd[bk].c>0 || bd[bk].w>0; });
-    if(books.length===0){
+      '<h4>分册明细（册 / 单元） · '+modeText+'</h4>';
+    // ★ v20：按「册」分组，册内按「单元」展开；当前所选册/单元高亮
+    var labels = Object.keys(bd).filter(function(lb){ return bd[lb].c>0 || bd[lb].w>0; });
+    if(labels.length===0){
       html += '<div class="bd-empty">本'+modeText+'无分册听写数据</div>';
     } else {
-      books.sort(function(a,b){ return (bd[b].c+bd[b].w)-(bd[a].c+bd[a].w); });
-      html += '<table class="bd-table"><thead><tr><th>分册</th><th>正确</th><th>错误</th><th>总量</th></tr></thead><tbody>';
-      books.forEach(function(bk){
-        var tot = bd[bk].c + bd[bk].w;
-        html += '<tr><td>'+escapeHtml(bk)+'</td><td class="bd-c">'+bd[bk].c+'</td><td class="bd-w">'+bd[bk].w+'</td><td style="font-weight:600;color:#1e3a5f">'+tot+'</td></tr>';
+      // ① 按册归组
+      var byBook = {};
+      labels.forEach(function(lb){
+        var book = bd[lb].book;
+        if(!byBook[book]) byBook[book] = [];
+        byBook[book].push(lb);
+      });
+      var bookNames = Object.keys(byBook);
+      // 当前所选册置顶
+      var cur = g.book;
+      bookNames.sort(function(a,b){
+        if(a===cur) return -1; if(b===cur) return 1;
+        var sa=0,sb=0; byBook[a].forEach(function(l){ sa+=bd[l].c+bd[l].w; });
+        byBook[b].forEach(function(l){ sb+=bd[l].c+bd[l].w; });
+        return sb-sa;
+      });
+      html += '<table class="bd-table"><thead><tr><th>分册 / 单元</th><th>正确</th><th>错误</th><th>总量</th></tr></thead><tbody>';
+      bookNames.forEach(function(book){
+        // 册汇总行
+        var bc=0,bw=0; byBook[book].forEach(function(l){ bc+=bd[l].c; bw+=bd[l].w; });
+        var isCurBook = (book===cur);
+        html += '<tr style="background:#f1f5f9;font-weight:600'+(isCurBook?'':'')+'">'
+              + '<td>'+(isCurBook?'★ ':'')+escapeHtml(book)+' <span style="color:#94a3b8;font-weight:400">（册汇总）</span></td>'
+              + '<td class="bd-c">'+bc+'</td><td class="bd-w">'+bw+'</td>'
+              + '<td style="font-weight:700;color:#1e3a5f">'+ (bc+bw) +'</td></tr>';
+        // 单元明细行（当前所选单元高亮）
+        byBook[book].sort(function(a,b){ return (bd[b].c+bd[b].w)-(bd[a].c+bd[a].w); });
+        byBook[book].forEach(function(lb){
+          var unit = bd[lb].unit;
+          var isCurUnit = isCurBook && (unit==="单元"+g.unit || (g.unit==="__all"&&unit==="未分单元"));
+          var sel = isCurUnit ? ' style="color:#2563eb;font-weight:700"' : '';
+          var tot = bd[lb].c + bd[lb].w;
+          html += '<tr><td style="padding-left:18px"'+(isCurUnit?' class="cur-unit"':'')+'>&nbsp;&nbsp;· '+unit+(isCurUnit?' ✅（当前所选）':'')+'</td>'
+                + '<td class="bd-c"'+sel+'>'+bd[lb].c+'</td>'
+                + '<td class="bd-w"'+sel+'>'+bd[lb].w+'</td>'
+                + '<td'+sel+' style="font-weight:600">'+tot+'</td></tr>';
+        });
       });
       html += '</tbody></table>';
     }
