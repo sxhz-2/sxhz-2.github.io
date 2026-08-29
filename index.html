@@ -14,11 +14,44 @@
   运行：浏览器直接打开即可；云端同步依赖 Supabase（CDN 引入）
 
 【二、当前版本】
-  version : 2026-08-29 · v20（改错统计重构 + 分册明细下钻单元 + 跨月红字）
-  上一基线：v18（根治「账本曾漂移」黄字；v19 数据恢复层已并入日常逻辑）
+  version : 2026-08-30 · v20.2（根治「已自动修平·仍存在异常」永久黄字 · scope 不对称）
+  上一基线：v20（改错统计重构 + 分册明细下钻单元 + 跨月红字）
   说明：本文件 = 用户真实运行文件（手机端）的本地副本。
   状态    ：可用于日常背诵 + 可作为新对话的接续基线
   定稿原则：以「指令原文 + 截图反推」为唯一依据，此后不再横跳；恒等式编译期强制、漂移自动修平。
+
+【二之十一、v20.1 新增（2026-08-29，本次修复）】
+  问题：账本自检持续黄字「🧮 已自动修平…仍存在异常」，报错形如
+       「剩余新词(76)≠册总量(262)−已听写去重(62)」——恒等式本应恒成立却反复失配。
+  根因（已复现确认，非推测）：getHeardSet 对 wrongBook 的册过滤为「book 为空则计入所有册」，
+       + rebuildMonthlyTotals 在 enrichWrongBook 之前执行 → 派生缓存以「未补绑」状态建好，
+       enrich 补绑后 heardSet 突变，renderStats 与 verifyLedger 两次取值不一致 → 时序抖动。
+  改动（最小、单一事实源）：
+  1. 新增 guessWordBook(word, unit)：book 缺失时按 VOCAB_LOOKUP 推断真实册（优先同单元）。
+  2. getHeardSet(wrongBook 分支) 严格归属：明确 book≠本册→排除；空 book→推断，推断不出不计本册
+     （根治同一错词被计入全部册的跨册泄漏，且只读推断=补绑结果，零抖动）。
+  3. enrichWrongBook：空 book 按真实册补绑（不再一律绑 g.book），与 getHeardSet 推断完全一致。
+  4. 顺序固化（init / loadState / runLedgerCheck / applySnapshotText）：
+     enrichWrongBook → rebuildMonthlyTotals → normalizeBuckets → recomputeTotals → saveState，
+     保证 rebuild 永远以「归属已确定」的 heardSet 为准。
+  守恒：恒等式 剩余新词 + 当月听写量 ≡ 册总量(cap) 在补绑前后恒等（已脚本验证全册通过）；
+       wrongBook 数据只补 book/释义、不删不改词，无数据丢失；探针隔离等既有逻辑不受影响。
+
+【二之十二、v20.2 新增（2026-08-30，本次修复）】
+  现象：v20.1 后仍黄字「🧮 已自动修平…仍存在异常」，报错形如「剩余新词(76)≠册总量(262)−已听写去重(62)」。
+  根因（已用真实数据精确复现，推翻 v20.1 的"时序抖动/跨册泄漏"假说）：
+      恒等式是【册级】死账（computeBookStats 内部 getHeardSet(book,"__all")，统计全册），
+      而 verifyLedger 此前传 scopeUnit（= g.unit，可能="第1单元"具体单元），
+      → 自检只统计该单元错词(=62)，与 computeBookStats 的册级(heard=186→remain=76)不同源
+      → 同一册两次取 heard 结果不同，恒等式必失配：76 ≠ 262−62。
+      复现探针（必修一 262 词：第1单元错62 + 他单元错124）输出与线上完全一致。
+  改动（最小，只动口径、不动数据）：
+      1. verifyLedger 不变量1/4 改为册级 getHeardSet(bk,"__all")，与 computeBookStats / recomputeMonthTotal
+         完全同源——恒等式自检不再受 g.unit 切换影响（单元级"剩余/已听写"归属展示层，不混入自检）。
+      2. runLedgerCheck 首检 / 修平后复检(vr2) 同样册级，确保修平即转绿、不再永久黄。
+  守恒：enrichWrongBook 补绑、严格册归属（v20.1）予以保留、未被回退；
+       monthlyTotals 派生缓存、rebuild 顺序(enrich→rebuild→normalize→recompute→save)保持不变；
+       探针隔离、日横·周月竖、跨月红字逻辑均未触碰。
 
 【二之十、v20 新增（2026-08-29）】
   三项改动（用户定稿，不再变更）：
@@ -1079,8 +1112,8 @@ function applySnapshotText(text, opts){
         window.__lastRecoveryRange = { from: merged[0].label, to: merged[merged.length-1].label, count: merged.length };
       }
     }
+    enrichWrongBook();                                       // ★ v20.1：先按真实册补绑空 book 错词，再重建/渲染，保证 heardSet 稳定
     saveState(); renderStats(); renderChart(); renderWrong(); renderBackupList();
-    enrichWrongBook();
     runLedgerCheck(false);
     if(window.__lastRecoveryRange){
       var R = window.__lastRecoveryRange;
@@ -10408,7 +10441,15 @@ function verifyLedger(scopeBook, scopeUnit){
   // 单一口径 = 去重单词数；允许跨月、遍周期与月份无关。
   var cap = BOOK_TOTAL[bk] || 0;
   var bs = computeBookStats(bk, currentYM());
-  var heardSet = getHeardSet(bk, scopeUnit||"__all");
+  // ★ v20.2 根治「已自动修平·仍存在异常」永久黄字：
+  //   不变量1 是【册级】死账恒等式（剩余 + 当月听写量 ≡ 册总量），语义与单元选择无关。
+  //   此前此处传 scopeUnit（= g.unit，可能是"第1单元"等具体单元），
+  //   → getHeardSet 只统计该单元错词，而 computeBookStats 内部硬编码 "__all" 统计【全册】，
+  //   → 同一册两次取 heard 结果不同（单元级 vs 册级），恒等式必然失配。
+  //   复现：必修一 262 词，第1单元错62、他单元错124 → remain=76、heard=62 → 报"76≠262−62"。
+  //   修复：自检一律册级（"__all"），与 computeBookStats / recomputeMonthTotal 完全同源。
+  //   单元级"剩余/已听写"是展示层概念，不得混入册级恒等式（见 renderStats 的单元口径字段）。
+  var heardSet = getHeardSet(bk, "__all");
   var totalHeard = heardSet.size;
   var expectedRemain = cap > 0 ? Math.max(0, cap - totalHeard) : 0;  // = cap − heardSet.size
   if(cap>0 && bs.remain !== expectedRemain){
@@ -10478,7 +10519,9 @@ function runLedgerCheck(verbose){
     return vr;
   }
   // ★ v17：自愈后【立刻重新校验】，成功则渲染为绿色（去抖动，不再永久黄）
-  try{ rebuildMonthlyTotals(); normalizeBuckets(); recomputeTotals(); enrichWrongBook(); saveState(); renderStats(); }catch(e){ console.error("账本修平失败", e); }
+  // ★ v20.1：顺序改为 enrichWrongBook → rebuildMonthlyTotals → ...
+  //   先按真实册补绑空 book 错词，再以 heardSet(去重) 重建派生缓存，杜绝时序漂移
+  try{ enrichWrongBook(); rebuildMonthlyTotals(); normalizeBuckets(); recomputeTotals(); saveState(); renderStats(); }catch(e){ console.error("账本修平失败", e); }
   var vr2 = verifyLedger(g.book, g.unit);   // 用修平后的真实状态再判一次
   if(vr2.ok){
     if(el) el.innerHTML = '<span style="color:#10b981">🧮 已自动修平（以 stats 桶为准）· 数据健康</span>';
@@ -10496,6 +10539,18 @@ function runLedgerCheck(verbose){
   return vr;
 }
 
+// 推断一个错词的真实所属册（book 字段缺失时使用）
+// 单一事实源 = VOCAB_LOOKUP（由 VOCAB_DATA 构建）。优先匹配 optUnit（同单元更可信），
+// 否则取该词出现的第一个册。返回册名或 ""（推断不出时不瞎绑）。
+function guessWordBook(word, optUnit){
+  var list = (VOCAB_LOOKUP||{})[word] || [];
+  if(!list.length) return "";
+  if(optUnit){
+    for(var i=0;i<list.length;i++){ if(String(list[i].unit||"") === String(optUnit)) return list[i].book||""; }
+  }
+  return list[0].book || "";
+}
+
 // 获取当前范围内已听写过（已掌握 ∪ 错词本）的单词集合
 function getHeardSet(book, unit){
   var heard = new Set();
@@ -10506,7 +10561,19 @@ function getHeardSet(book, unit){
   });
   Object.keys(g.wrongBook||{}).forEach(function(w){
     var v = g.wrongBook[w]||{};
-    if(v.book && v.book !== book) return;
+    // ★ 册归属严格化（v20.1 根治「剩余新词≠册总量−已听写去重」）：
+    //   旧版/导入残留的错词 book 可能为空字符串。此前「book 为空则计入所有册」
+    //   导致同一错词被同时计入全部册的 heardSet，造成跨册污染、remain 时序抖动。
+    //   规则：① book 明确且 ≠ 当前册 → 排除；② book 为空 → 用 VOCAB_LOOKUP 推断真实册，
+    //   推断不出则本册不计（不泄漏到全册），由 enrichWrongBook 持久化补绑。
+    var vbook = v.book || "";
+    if(vbook){
+      if(vbook !== book) return;                       // ① 明确归属其他册 → 排除
+    } else {
+      var guessed = guessWordBook(w, v.unit||"");       // ② 空 book：推断真实册
+      if(guessed && guessed !== book) return;
+      if(!guessed) return;                              // 推断不出 → 本册不计（防泄漏）
+    }
     if(unit !== "__all" && v.unit && v.unit !== unit) return;
     heard.add(w);
   });
@@ -10763,19 +10830,25 @@ function resolveWordInfo(word, optBook){
 }
 
 // 加载/导入后回填错词本缺失的释义/音标/词性（从 VOCAB_DATA 补全），幂等、只补不删、不丢数据。
-// 对 book 为空的旧错词，补绑当前册 g.book，避免"空册"错词在按册作用域过滤时丢失。
+// 对 book 为空的旧错词，按真实归属（VOCAB_LOOKUP）补绑册，避免"空册"错词在按册过滤时丢失。
+// ★ v20.1：改为「按词真实册补绑」，不再一律绑 g.book——
+//   旧版全绑当前册会把其他册的错词错误并入，导致 heardSet 虚高、恒等式漂移。
+//   补绑结果与 getHeardSet 的只读推断（guessWordBook）完全一致，保证补绑前后 heardSet 不变。
 function enrichWrongBook(){
   var filled = 0, bound = 0;
   Object.keys(g.wrongBook||{}).forEach(function(w){
     var v = g.wrongBook[w]; if(!v) return;
-    if(!v.book && g.book){ v.book = g.book; bound++; }
+    if(!v.book){
+      var realBook = guessWordBook(w, v.unit||"");      // 按真实归属补绑
+      if(realBook){ v.book = realBook; bound++; }
+    }
     var info = resolveWordInfo(w, v.book||g.book);
     if(!v.meaning && info.meaning){ v.meaning = info.meaning; filled++; }
     if(!v.phonetic && info.phonetic){ v.phonetic = info.phonetic; }
     if(!v.pos && info.pos){ v.pos = info.pos; }
   });
   if(filled>0){ try{ console.log("[enrichWrongBook] 回填释义 "+filled+" 条"); }catch(e){} }
-  if(bound>0){ try{ console.log("[enrichWrongBook] 补绑当前册 "+bound+" 条"); }catch(e){} }
+  if(bound>0){ try{ console.log("[enrichWrongBook] 按真实册补绑 "+bound+" 条"); }catch(e){} }
   return filled;
 }
 
@@ -10955,7 +11028,7 @@ function init(){
     if(typeof saved.updatedAt==="number") g.updatedAt = saved.updatedAt;
     // ★ v16：先 normalize（修桶） → rebuildMonthlyTotals（以 heardSet 重建月听写量） → recomputeTotals（以 byUnit 重建累计）
     //   顺序关键：recomputeMonthTotal 依赖 getHeardSet，须先确保 masteredWords/stats 已恢复。
-    normalizeBuckets(); rebuildMonthlyTotals(); recomputeTotals(); // 加载后以账本为准重算累计，并重建册级月听写量
+    enrichWrongBook(); rebuildMonthlyTotals(); normalizeBuckets(); recomputeTotals(); // ★ v20.1：先按真实册补绑空 book 错词，再以 heardSet 重建派生缓存
     purgeDiagnosticProbes();                                      // 清除历史连通测试探针污染的分册明细/错词本
     // 会话锚点协调：若恢复的「本次」不属于今天（次日打开 / 旧版无锚点数据），则清零，避免「本次 > 今日」倒挂
     reconcileSession();
@@ -11246,7 +11319,7 @@ function init(){
     document.addEventListener("keydown", function(ev){ if(ev.key==="Escape") closeWrongFullscreen(); });
   }
   /* v17: 读档后幂等重算并把干净值回写存档，打破脏值循环 */
-  try{ rebuildMonthlyTotals(); normalizeBuckets(); recomputeTotals(); enrichWrongBook(); saveState(true); }catch(e){ console.warn("[v17] loadState 回写失败",e); }
+  try{ enrichWrongBook(); rebuildMonthlyTotals(); normalizeBuckets(); recomputeTotals(); saveState(true); }catch(e){ console.warn("[v17] loadState 回写失败",e); }
   // 页面加载即校验账本，状态常驻显示在统计栏
   if(g.supaUrl && g.supaKey) initSupa();
   renderAuthUI();
