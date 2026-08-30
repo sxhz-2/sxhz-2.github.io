@@ -14,7 +14,7 @@
   运行：浏览器直接打开即可；云端同步依赖 Supabase（CDN 引入）
 
 【二、当前版本】
-  version : 2026-08-30 · v21.1（修复账本自检·册级恒等式误报 + 改错日周月分化 + 时区全闭环）
+  version : 2026-08-30 · v21.2（修复答题按钮「点不了」：checkAnswer 中 bucket 在定义前赋值 _written 导致 TypeError，作答链路中断；写前拦截日志降级 warn）
   上一基线：v20.8（今日改错 = 纯事件计数，A方案定稿）
   说明：本文件 = 用户真实运行文件（手机端）的本地副本。
   状态    ：可用于日常背诵 + 可作为新对话的接续基线
@@ -60,6 +60,30 @@
    · 真实漂移(remain 真对不上 heardAll)：仍正确报警，绝不掩盖真问题
    · 恒等式「剩余新词 + 当月听写量 ≡ 册总量(cap)」口径唯一，死账恒等
   明确不动：改错统计·日周月分化、时区闭环、今日改错A方案 —— 均非本轮问题，零改动。
+
+【二之十四、v21.2 新增（2026-08-30 · 本轮，修复答题按钮「点不了」）】
+  现象（用户手机截图反推）：正常听写 / 错词听写 进入答题区后，「下一题/跳过/再听/退出/按住说话」
+        全部功能键点不动；按钮本身存在且 onclick 已绑定，实为「点了无反应、答题卡死」。
+  根因：checkAnswer（约 L11715-11720）批次A重构时插入行导致顺序错乱：
+        g._todayWritten = today;
+        bucket._written = today;   ← bucket 此时尚未定义（TDZ/提前引用）
+        var bucket = getStatsBucket(today);  ← bucket 在此才定义
+        → TypeError: Cannot set properties of undefined (setting '_written')
+        → checkAnswer 中断，UI 无反馈 → 用户感知为「按钮点不了」。
+  关键：正常听写 与 错词听写 共用同一 checkAnswer → 两入口「同样点不了」，与截图完全一致。
+  改动（仅 1 处，零副作用）：
+    把「var bucket = getStatsBucket(today);」提到「bucket._written = today;」之前，
+    保证 bucket 定义后再写入自证标记。批次A（今日桶自证）语义完全保留。
+  连带清理（同类残留，非阻塞但致控制台泛红）：
+    saveState 内「v17 写前拦截」检测到累计漂移(totalCorrect/totalWrong vs byUnit之和)后
+    本就会自动修平并继续保存，但原用 console.error 级别 → 降级为 console.warn 并明确标注
+    「已自动修平·以账本为准，不影响保存」，真机控制台不再一片红。
+  验证（jsdom 端到端，全部通过）：
+    · 语法门（node/vm）PASS；应用正常启动，[判定自检] 18/18 通过
+    · btnStart / btnWrongMode / qNext / qSkip / qReplay / qExit 全部 exists+enabled+无遮挡
+    · 连续5次点击「下一题」无 JS 异常；今日桶正确记账（_written + byUnit 按册|单元）
+    · 错词听写入口可点击；运行时控制台致命错误 = 0
+  明确不动：今日改错A方案、日周月分化、时区闭环、v21.1 恒等式 —— 全部保留，零改动。
 
 【二之十一、v20.8 新增（2026-08-30 · 本轮，仅动改错统计·今日改错）】
   依据：用户字面口径——「今日改错 = 今天改了错的数量，有一个算一个；没改=0；第二天没改依旧=0；改了有一个算一个」。
@@ -11715,9 +11739,9 @@ function checkAnswer(ans){
   var today = todayStr();
   g._sessionDate = today; // 锚点归到当天（reconcileSession 已在顶部处理跨日清零）
   g._todayWritten = today; // 标记：今日确有真实作答（用于「未听写则今日各项归0」）
-  bucket._written = today; // ★批次A(P0-1) 今日桶自证标记
-  try{ localStorage.setItem('vocab_today_written', JSON.stringify({d:today, v:1})); }catch(e){} // ★独立key持久化
   var bucket = getStatsBucket(today);
+  bucket._written = today; // ★批次A(P0-1) 今日桶自证标记（须在 bucket 定义后写入）
+  try{ localStorage.setItem('vocab_today_written', JSON.stringify({d:today, v:1})); }catch(e){} // ★独立key持久化
   if(isCorrect) bucket.c++;
   else if(a) bucket.w++;
   var curBook = cur.book || g.book;
@@ -13962,7 +13986,7 @@ function checkLegacyData(){
 
 // ===== 保存状态（含自动备份）=====
 function saveState(){/* v21 (脏标记·P0-3) : 写前校验保留；调用即视为一次真实保存意图 → 版本前进。
-   仅 syncPull/导入 这类"恢复外部状态"入口不打脏（它们用 applySnapshot 置 g._dirty=false）。 */(function(){  try{    var _c=0,_w=0;    Object.keys(g.stats||{}).forEach(function(k){      if(!isStatsDateKey(k)) return;      var st=g.stats[k]; if(!st||!st.byUnit) return;      Object.keys(st.byUnit).forEach(function(uk){        var bk=(uk.split("|")[0])||"";        if(isDiagnosticBook(bk)) return;        _c+=(st.byUnit[uk].c||0); _w+=(st.byUnit[uk].w||0);      });    });    if(g.totalCorrect!==_c || g.totalWrong!==_w){      console.error("[v17 写前拦截] 累计漂移: totalCorrect="+g.totalCorrect+"(应"+_c+"), totalWrong="+g.totalWrong+"(应"+_w+")", new Error().stack);      g.totalCorrect=_c; g.totalWrong=_w;    }  }catch(e){}})();
+   仅 syncPull/导入 这类"恢复外部状态"入口不打脏（它们用 applySnapshot 置 g._dirty=false）。 */(function(){  try{    var _c=0,_w=0;    Object.keys(g.stats||{}).forEach(function(k){      if(!isStatsDateKey(k)) return;      var st=g.stats[k]; if(!st||!st.byUnit) return;      Object.keys(st.byUnit).forEach(function(uk){        var bk=(uk.split("|")[0])||"";        if(isDiagnosticBook(bk)) return;        _c+=(st.byUnit[uk].c||0); _w+=(st.byUnit[uk].w||0);      });    });    if(g.totalCorrect!==_c || g.totalWrong!==_w){      console.warn("[v17 写前拦截] 累计漂移已自动修平: totalCorrect="+g.totalCorrect+"→"+_c+", totalWrong="+g.totalWrong+"→"+_w+"（存档缓存与账本(byUnit之和)不一致，以账本为准，不影响保存）");      g.totalCorrect=_c; g.totalWrong=_w;    }  }catch(e){}})();
   try{
     g._dirty = true;   // ★ v21（D-4c）：主动 saveState = 业务变更意图 → 版本前进（导入/同步恢复用 applySnapshot 置 false）
     normalizeBuckets();        // 先修平历史漂移
