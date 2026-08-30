@@ -14,7 +14,7 @@
   运行：浏览器直接打开即可；云端同步依赖 Supabase（CDN 引入）
 
 【二、当前版本】
-  version : 2026-08-30 · v21（改错统计·日周月窗口分化 + 时区口径全闭环，A/B/C/D/E 定稿）
+  version : 2026-08-30 · v21.1（修复账本自检·册级恒等式误报 + 改错日周月分化 + 时区全闭环）
   上一基线：v20.8（今日改错 = 纯事件计数，A方案定稿）
   说明：本文件 = 用户真实运行文件（手机端）的本地副本。
   状态    ：可用于日常背诵 + 可作为新对话的接续基线
@@ -42,6 +42,24 @@
    · 顶部口径: 日 ≤ 周 ≤ 月（日/周自然窗口、月跨月累积），不再三值全等
    · 今日改错(事件计数) = g.todayFixCount，与本次窗口修复正交、零改动、不受影响
    · 跨月红字 hasCrossMonthWrong：存在「updated<本月1号」的未改正错词 → true
+
+【二之十三、v21.1 新增（2026-08-30 · 修复「账本自检·仍存在异常」误报）】
+  依据：真机截图——学习统计常驻黄字「🧮 已自动修平·仍存在异常」，控制台
+        `[账本自检] 剩余新词(180)≠册总量(262)−已听写去重(34)`，每次加载必现。
+  根因：verifyLedger 不变量1 用 `getHeardSet(bk, scopeUnit||"__all")` 取已听写数，
+        而 runLedgerCheck 传入 `g.unit`。当用户选中【具体单元】(g.unit="1" 等) 时：
+          · totalHeard = 该单元级 heard(34)，但
+          · bs.remain  = computeBookStats 内部固定册级 __all(262−82=180)
+        册级死账「剩余+当月≡cap」被混入单元级口径 → 恒成立失配 → 黄字必现。
+        （computeBookStats L10960 本就固定 __all，两侧本应同源，系历史遗漏。）
+  改动（仅 1 处，verifyLedger 不变量1）：
+        getHeardSet(bk, scopeUnit||"__all")  →  getHeardSet(bk, "__all")
+        注释明确：恒等式是【册级死账】，与单元选择无关；单元级一致性由其他调用方保证。
+  不变量（均成立）：
+   · 正常场景(g.unit 任意值)：remain 与册级 heardAll 一致 → 自检通过，黄字消失
+   · 真实漂移(remain 真对不上 heardAll)：仍正确报警，绝不掩盖真问题
+   · 恒等式「剩余新词 + 当月听写量 ≡ 册总量(cap)」口径唯一，死账恒等
+  明确不动：改错统计·日周月分化、时区闭环、今日改错A方案 —— 均非本轮问题，零改动。
 
 【二之十一、v20.8 新增（2026-08-30 · 本轮，仅动改错统计·今日改错）】
   依据：用户字面口径——「今日改错 = 今天改了错的数量，有一个算一个；没改=0；第二天没改依旧=0；改了有一个算一个」。
@@ -10496,7 +10514,12 @@ function verifyLedger(scopeBook, scopeUnit){
   // 单一口径 = 去重单词数；允许跨月、遍周期与月份无关。
   var cap = BOOK_TOTAL[bk] || 0;
   var bs = computeBookStats(bk, currentYM());
-  var heardSet = getHeardSet(bk, scopeUnit||"__all");
+  // ★ v21 修复：恒等式「剩余新词 + 当月听写量 ≡ 册总量(cap)」是【册级死账】，与单元选择无关。
+  //   computeBookStats 内部 getHeardSet 固定用 "__all"（见 L10960），此处必须保持一致，
+  //   否则 g.unit 为具体单元（如 "1"）时，totalHeard 退化为单元级(34)，
+  //   而 bs.remain 是册级(cap − 全册heard)，二者必然失配 → 每次加载必现黄字。
+  //   单元级一致性由 getHeardSet(book, unit) 的其他调用方保证，不属于本恒等式范畴。
+  var heardSet = getHeardSet(bk, "__all");
   var totalHeard = heardSet.size;
   var expectedRemain = cap > 0 ? Math.max(0, cap - totalHeard) : 0;  // = cap − heardSet.size
   if(cap>0 && bs.remain !== expectedRemain){
