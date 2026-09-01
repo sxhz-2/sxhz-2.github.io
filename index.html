@@ -3,9 +3,35 @@
 ================================================================================
   单词听写应用 · 自描述说明（SELF-DESCRIPTION HEADER）
 --------------------------------------------------------------------------------
-  用途：本注释是新对话/新维护者的「快速对齐入口」。
-        任何 AI 或开发者只需通读此处，即可在不依赖外部记忆的前提下接续开发。
-        若此处描述与实际代码不符，以代码为准，并请同步更新本注释。
+  version : 2026-09-01 · v23（改错统计口径重构：错误/月错误量锁月、已改正/未改正/改正率随日周月切；createdAt 根治 updated 同步污染；交付数据还原真实48已改+107未改）
+  上一基线：v21.2（修复答题按钮「点不了」）
+  说明：本文件 = 用户真实运行文件（手机端）的本地副本。
+  状态    ：可用于日常背诵 + 可作为新对话的接续基线
+  定稿原则：以「指令原文 + 截图反推 + 真实导出数据复现」为唯一依据，此后不再横跳；
+           恒等式编译期强制、漂移自动修平。
+
+【二、版本】
+  v22 新增（2026-09-01 · 本轮，今日错误事件计数 + 月清0口径确认）：
+  依据：用户定稿口径——
+    ① 今日错误 = 今日错误总数，有一个算一个，跳过算错误
+    ② 今日改错 = 今日改正确数（v20.8 已定稿，本轮零改动保留）
+    ③ 清0规则：日次日清0 / 周次周清0 / 月=全册是否改完（全部改完次月清0；未改完跨月累积；全部改完次日清0）
+  改动（与今日改错 todayFixCount 完全对称，共 7 处 + HTML 1 行）：
+  1. 新增独立事件计数器：todayWrongDate(所属北京自然日) + todayWrongCount(当日错误事件数)
+     —— 答错 +1、跳过 +1，有一个算一个；markDone/改对路径不加（今日改错独立计数）
+  2. rollTodayWrongIfNeeded()：跨日(todayWrongDate≠今日)自动归0（每日0点语义），与 rollTodayFix 对称
+  3. 唯一写入点：checkAnswer 的「答错」与「跳过」两分支（真实作答事件）
+  4. 持久化：独立 key「vocab_today_wrong」{d,c}，saveState 写、loadState 恢复（跨日归0）；
+     不参与云端 LWW 合并，杜绝 syncPull 污染（与 vocab_today_fix 完全对称）
+  5. 读取(updatePeriodFix)：改错统计新增「今日错误」卡片(pTodayWrong)，与「今日改错」并列
+  6. 导出 JSON：存档对象新增 todayWrongDate/todayWrongCount 字段（完整可迁移）
+  不变量（均成立，verify.js 断言全绿）：
+   · 答错 +1、跳过 +1、改对 +0 → todayWrong = 今日真实错误事件数，有一个算一个
+   · 今日无真实作答 → todayWrongCount = 0（同步/导入/回填不触碰，绝不虚增）
+   · 次日0点 → todayWrongCount 归0（自然日切分，与今日改错同源）
+   · 今日错误 ⊥ 今日改错：二者独立计数、成对对称、互不干扰
+   · 月清0 = 全册 wrongBook 是否全部改完（不分册），与当前所选册无关 —— 代码 advanceFixClear 原已正确，零改动
+  明确不动：今日改错A方案(todayFixCount)、日周月分化、时区闭环(+08)、v21.1 恒等式、checkAnswer 作答链路 —— 全部保留。
 ================================================================================
 
 【一、项目】
@@ -84,6 +110,76 @@
     · 连续5次点击「下一题」无 JS 异常；今日桶正确记账（_written + byUnit 按册|单元）
     · 错词听写入口可点击；运行时控制台致命错误 = 0
   明确不动：今日改错A方案、日周月分化、时区闭环、v21.1 恒等式 —— 全部保留，零改动。
+
+【二之十五、v22 新增（2026-09-01 · 今日错误事件计数 + 月清0口径确认）】
+  依据：用户定稿口径——
+    ① 今日错误 = 今日错误总数，有一个算一个，跳过算错误
+    ② 今日改错 = 今日改正确数（v20.8 A方案，本轮零改动保留）
+    ③ 清0规则：日次日清0 / 周次周清0 / 月=全册是否改完（全部改完次月清0；未改完跨月累积；全部改完次日清0）
+  改动（与今日改错 todayFixCount 完全对称，共 7 处 + HTML 1 行）：
+  1. 新增独立事件计数器：todayWrongDate(所属北京自然日) + todayWrongCount(当日错误事件数)
+     —— 答错 +1、跳过 +1，有一个算一个；改对路径不加（今日改错独立计数）
+  2. rollTodayWrongIfNeeded()：跨日(todayWrongDate≠今日)自动归0（每日0点语义），与 rollTodayFix 对称
+  3. 唯一写入点：checkAnswer 的「答错」与「跳过」两分支（真实作答事件）
+  4. 持久化：独立 key「vocab_today_wrong」{d,c}，saveState 写、loadState 恢复（跨日归0）；
+     不参与云端 LWW 合并，杜绝 syncPull 污染（与 vocab_today_fix 完全对称）
+  5. 读取(updatePeriodFix)：改错统计新增「今日错误」卡片(pTodayWrong)，与「今日改错」并列
+  6. 导出 JSON：存档对象新增 todayWrongDate/todayWrongCount 字段（完整可迁移）
+  不变量（均成立，verify.js 断言全绿）：
+   · 答错 +1、跳过 +1、改对 +0 → todayWrong = 今日真实错误事件数，有一个算一个
+   · 今日无真实作答 → todayWrongCount = 0（同步/导入/回填不触碰，绝不虚增）
+   · 次日0点 → todayWrongCount 归0（自然日切分，与今日改错同源）
+   · 今日错误 ⊥ 今日改错：二者独立计数、成对对称、互不干扰
+   · 月清0 = 全册 wrongBook 是否全部改完（不分册），与当前所选册无关 —— advanceFixClear 原已正确，零改动
+  明确不动：今日改错A方案(todayFixCount)、日周月分化、时区闭环(+08)、v21.1/v21.2 全部修复 —— 保留。
+
+【二之十六、v23 新增（2026-09-01 · 改错统计口径重构 + createdAt 根治 updated 污染）】
+  依据：用户定稿口径（B方案，日/周/月标签切换规则）——时间标准=北京时间，日=自然日/周=自然周(周一)/月=自然月；
+        ★ 本轮核心：上一版(v22)"一次性改对交付"把 107 条未改词全标 fixed=true，与事实矛盾，
+        用户明确"并没有改完" → 彻底还原备份真实状态（48 已改 + 107 未改），一条不造假。
+  改错统计·切到「日/周/月」标签时的卡片口径：
+    ┌──────────────┬──────────────────────┬──────────┐
+    │ 卡片         │ 定义                 │ 随标签切 │
+    ├──────────────┼──────────────────────┼──────────┤
+    │ 错误         │ 当月错误总量         │ 锁月     │
+    │ 已改正       │ 当日(周期)已改正总量 │ 切(日/周/月)│
+    │ 未改正       │ 当日(周期)未改正总量 │ 切       │
+    │ 改正率       │ 当日(周期)改正率     │ 切       │
+    │ 今日改错     │ 当日改对总量         │ 锁今日   │
+    │ 今日错误     │ 当日错误总量         │ 锁今日   │
+    │ 月错误量     │ 当月错误总量         │ 锁月(=错误)│
+    │ 跨月继续改错 │ 上月未改完量         │ 锁上月   │
+    └──────────────┴──────────────────────┴──────────┘
+  关键决策（B方案）：
+    · 未改正 = 当日(周期)错误 − 当日(周期)已改正（纯同周期口径，不跨周期相减；周/月标签下 ≤ 月未改正）
+    · 错误 ≡ 月错误量（同义）→ 保留两张卡片维持视觉稳定，label 明示"月"
+  根因修复（第一轮排查"信息混乱"的根本原因）：
+    · updated 被 syncPull/导入 批量刷新 → 丧失"出错时间"语义 → 日/周/月计数随同步日乱跳
+    · ★ 新增独立字段 createdAt = 首次出错时间（永不变），改错统计时段过滤全部改用 createdAt
+    · 写入点：addWrong(新错词)/mergeOneWord(取早)/_wbEntryDefaults(兜底)/applySnapshotText(导入补全)/
+              loadState(backfillCreatedAt 回填)/syncPull(云端合并取早)/syncPush(上传 created_at)
+    · 读取点：getWrongInScopeAll/aggregateWrongByBook/hasCrossMonthWrong/getLastMonthUnfixedCount/renderFixBreakdown
+    · 向后兼容：createdAtOf() 缺失 → 回落 updated → 再回落 0（极早期条目，落在所有窗口内）
+  改动（共 9 处 + HTML 1 行 + 交付数据还原）：
+    1. updatePeriodFix：错误/月错误量=锁月（getFixSince("month")）、已改正/未改正/改正率=随周期（getFixSince(mode)）
+       —— 顶部直接内联计算，明确分离"锁月"与"切周期"两套口径
+    2. hasCrossMonthWrong → 「上月未改完量」（严格 < 本月1号0点，createdAt 判定）
+    3. 新增 getLastMonthUnfixedCount()：「跨月继续改错」卡片显示"上月未改完 N"
+    4. getWrongInScopeAll / aggregateWrongByBook：updated → createdAtOf()
+    5. addWrong：新增 createdAt=now（首次出错，永不变）
+    6. mergeOneWord：createdAt 取早者（OR 合并保留最早出错时间）
+    7. _wbEntryDefaults：补齐 createdAt 默认
+    8. applySnapshotText / syncPull / syncPush：导入补全 + 上传 created_at 字段
+    9. loadState：backfillCreatedAt（历史条目 createdAt 缺失回落 updated，整批簇对齐北京0点）
+    10. HTML：跨月卡片 label "跨月状态" → "跨月继续改错"
+  清0规则（确认无需改动，advanceFixClear 原已正确）：
+    · 日次日清0 / 周次周清0 / 月=全册是否改完（全部改完次月清0；未改完跨月累积）
+  不变量（均成立，verify.js + replay 断言全绿）：
+    · 全册未改完(107≠0) → allFixedDate="" → 跨月继续累积（符合规则）
+    · createdAt 永不被同步链路刷新；updated 再怎么变，改错统计窗口不再乱跳
+    · 今日错误 ⊥ 今日改错（独立事件计数，跨日归0，与 createdAt/updated 彻底解耦）
+    · 恒等式自检：顶部(createdAt 窗口) ≥ 明细之和（±1 容差·未分册兜底），真正交叉校验而非恒等自比
+  明确不动：今日改错A方案(todayFixCount)、今日错误事件计数、日周月分化结构、时区闭环(+08) —— 保留。
 
 【二之十一、v20.8 新增（2026-08-30 · 本轮，仅动改错统计·今日改错）】
   依据：用户字面口径——「今日改错 = 今天改了错的数量，有一个算一个；没改=0；第二天没改依旧=0；改了有一个算一个」。
@@ -677,9 +773,10 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
         <div class="stat"><div class="v" id="pFixed">0</div><div class="l">已改正</div></div>
         <div class="stat"><div class="v" id="pUnfix">0</div><div class="l">未改正</div></div>
         <div class="stat"><div class="v" id="pTodayFix">0</div><div class="l">今日改错</div></div>
+        <div class="stat"><div class="v" id="pTodayWrong" style="color:#ef4444">0</div><div class="l">今日错误</div></div>
         <div class="stat"><div class="v" id="pFixRate">0%</div><div class="l">改正率</div></div>
         <div class="stat"><div class="v" id="pMonthError" style="color:#ef4444">0</div><div class="l">📅 月错误量</div></div>
-        <div class="stat"><div class="v" id="pCrossMonth" style="color:#ef4444;font-size:13px;min-height:20px">&nbsp;</div><div class="l">跨月状态</div></div>
+        <div class="stat"><div class="v" id="pCrossMonth" style="color:#ef4444;font-size:13px;min-height:20px">&nbsp;</div><div class="l">跨月继续改错</div></div>
       </div>
       <div id="fixBreakdown" style="margin-top:8px"></div>
     </div>
@@ -1039,7 +1136,8 @@ function cloneObj(o){ try{ return JSON.parse(JSON.stringify(o)); }catch(e){ retu
 //           stats 按日期×单元取大、masteredWords 取并集
 // =====================================================================
 function _wbEntryDefaults(v){
-  return Object.assign({count:0,fixed:false,book:"",unit:"",pos:"",meaning:"",phonetic:"",updated:0,lastInput:""}, v||{});
+  // ★ v23：补齐 createdAt 默认（缺失时由调用方/回填逻辑赋值；此处给 0 占位，避免 NaN）
+  return Object.assign({count:0,fixed:false,book:"",unit:"",pos:"",meaning:"",phonetic:"",updated:0,createdAt:0,lastInput:""}, v||{});
 }
 // 合并单个错词条目（l=本地, r=传入），返回较新一方为底的合并结果
 function mergeOneWord(l, r){
@@ -1058,6 +1156,11 @@ function mergeOneWord(l, r){
   if(lfa && rfa){ out.fixedAt = Math.min(lfa, rfa); }
   else if(lfa || rfa){ out.fixedAt = lfa || rfa; }
   else if(wasFixed){ out.fixedAt = Math.min(lu, ru) || 0; }
+  // ★ v23：createdAt = 首次出错时间，取早者（任一方有值则用更早的，永不被刷新）
+  var lca = l.createdAt||0, rca = r.createdAt||0;
+  if(lca && rca){ out.createdAt = Math.min(lca, rca); }
+  else if(lca || rca){ out.createdAt = lca || rca; }
+  else { out.createdAt = Math.min(lu, ru) || 0; }   // 历史缺失回落 updated，再回落 0
   return out;
 }
 // 合并 wrongBook；acc={added,updated} 用于回显导入结果
@@ -1122,7 +1225,7 @@ function applySnapshotText(text, opts){
         g.wrongBook = {};
         Object.entries(d.wrongBook).forEach(function(p){
           var k=p[0], v=p[1];
-          g.wrongBook[k] = Object.assign({count:0,fixed:false,book:"",unit:"",pos:"",meaning:"",phonetic:"",updated:Date.now(),lastInput:""}, v);
+          g.wrongBook[k] = Object.assign({count:0,fixed:false,book:"",unit:"",pos:"",meaning:"",phonetic:"",updated:Date.now(),createdAt:(v&&v.createdAt)||Date.now(),lastInput:""}, v);
         });
       }
     }
@@ -10406,6 +10509,15 @@ var g = {
   //   同步/导入/回填 一律不触碰这两个字段，杜绝"听写=0 却今日=2"的虚假计数
   todayFixDate: "",
   todayFixCount: 0,
+  // —— 今日错误（v22 · 与今日改错完全对称的事件计数）——
+  // 口径：今日错误 = 今天答错 + 跳过 的总次数，有一个算一个（跳过算错误）。
+  //   与「今日改错 = 今日改对次数」成对，两者均按北京自然日切分、次日0点清0。
+  //   todayWrongDate  = 计数器所属的北京自然日(YYYY-MM-DD)，跨日自动归0
+  //   todayWrongCount = 当日错误事件累计数（答错/跳过各 +1）
+  //   唯一写入点：checkAnswer 的「答错」与「跳过」两个分支（真实作答事件）。
+  //   同步/导入/回填 一律不触碰，杜绝同步污染（同 todayFixCount 设计）。
+  todayWrongDate: "",
+  todayWrongCount: 0,
   // —— 遍数追踪（v8）——
   // passCount[book] = 该册已完成的遍数；bookCompletedDate[book] = 最近一遍完成日（次日0点触发归0）
   // 清0前不存云端；但本地保留每一遍的完整快照 passArchive（不上云），供「上一遍可回溯 / 还原」。
@@ -10421,6 +10533,15 @@ function rollTodayFixIfNeeded(){
   if(g.todayFixDate !== key){
     g.todayFixDate = key;
     g.todayFixCount = 0;
+  }
+}
+// 今日错误计数器：跨日自动归0（北京时间自然日切分），与 rollTodayFixIfNeeded 完全对称。
+// 每次读写前调用，保证 todayWrongCount 永远属于「今天」。
+function rollTodayWrongIfNeeded(){
+  var key = todayYMD();
+  if(g.todayWrongDate !== key){
+    g.todayWrongDate = key;
+    g.todayWrongCount = 0;
   }
 }
 // stats 结构: stats[date] = { c:总数, w:总数, byUnit: { "book|unit": {c,w} } }
@@ -11106,6 +11227,14 @@ function init(){
       if(_tf && _tf.d === _tfKey){ g.todayFixDate = _tf.d; g.todayFixCount = (typeof _tf.c==="number")?_tf.c:0; }
       else { g.todayFixDate = _tfKey; g.todayFixCount = 0; }
     }catch(e){ g.todayFixDate = todayYMD(); g.todayFixCount = 0; }
+    // ★ v22：恢复今日错误计数器（独立 key，与今日改错对称，不参与云端合并）。
+    //   若存档的 todayWrongDate ≠ 今日，说明已跨日 → 归0（自然日切分，次日0点语义）。
+    try{
+      var _tw = JSON.parse(localStorage.getItem("vocab_today_wrong")||"{}")||{};
+      var _twKey = todayYMD();
+      if(_tw && _tw.d === _twKey){ g.todayWrongDate = _tw.d; g.todayWrongCount = (typeof _tw.c==="number")?_tw.c:0; }
+      else { g.todayWrongDate = _twKey; g.todayWrongCount = 0; }
+    }catch(e){ g.todayWrongDate = todayYMD(); g.todayWrongCount = 0; }
     // ★ v16：不再直接恢复 totalCorrect/totalWrong/monthlyTotals 的存档值——
     //   这些是「死账派生」字段，由 recomputeTotals/rebuildMonthlyTotals 从 stats 桶实时算出。
     //   先恢复权威源（stats / masteredWords），再由下方统一重算覆盖，避免脏值窗口期触发误漂。
@@ -11155,6 +11284,27 @@ function init(){
           } else {
             x.fixedAt = ts;
           }
+        });
+      }catch(e){}
+    })();
+    // ★ v23：回填 createdAt（幂等，升级过渡期一次性执行，之后 createdAt 由写入链路保证）。
+    //   语义：createdAt = 首次出错时间（永不变）。历史条目无 createdAt 时：
+    //     · fixed=true  → 用 fixedAt（真实改正时刻之前，即首次出错），再回落 updated；
+    //     · fixed=false → 用 updated（最近一次出错），再回落 0。
+    //   不丢数、不改历史；整批簇（同一秒≥3条，syncPull/批量保存指纹）对齐北京当日0点抹掉虚假精确秒，
+    //   与 backfillFixedAt 同策略，避免批量时间戳挤成虚假的"今日"。
+    (function backfillCreatedAt(){
+      try{
+        var wbs = g.wrongBook||{};
+        var secCount = {};
+        Object.values(wbs).forEach(function(x){ if(x){ var s=Math.floor((x.updated||0)/1000); if(s>0) secCount[s]=(secCount[s]||0)+1; } });
+        var clusterSec = {};
+        Object.keys(secCount).forEach(function(s){ if(secCount[s]>=3) clusterSec[s]=1; });
+        Object.values(wbs).forEach(function(x){
+          if(!x || x.createdAt) return;                     // 已有 createdAt → 永不覆盖
+          var base = (x.fixed && x.fixedAt) ? x.fixedAt : (x.updated||0);
+          if(clusterSec[Math.floor((x.updated||0)/1000)]){ x.createdAt = dayStartOfTs(x.updated||0) || base; }
+          else { x.createdAt = base; }
         });
       }catch(e){}
     })();
@@ -11703,6 +11853,7 @@ function checkAnswer(ans){
     fb.innerHTML = '<span style="color:#94a3b8">已跳过，已收入错词本</span>';
     g.wrong++;
     if(!cur.fake) addWrong(cur.word, cur.book, cur.unit, cur.pos, cur.meaning, cur.phonetic, "");
+    rollTodayWrongIfNeeded(); g.todayWrongCount = (g.todayWrongCount||0) + 1; // ★ v22：跳过算错误，今日错误事件 +1
     heard = 1; // 跳过也计入月听写量（听一个计一个）
     if(g._todayWritten === today) bucket.w++;   // ★ v21（E-9）：跳过计入今日桶 w，与"听一个计一个"口径统一
   } else if(isCorrect){
@@ -11732,6 +11883,7 @@ function checkAnswer(ans){
       '<div style="font-size:12px;color:#64748b;margin-top:2px">已收入错词本</div>';
     g.wrong++;
     if(!cur.fake) addWrong(cur.word, cur.book, cur.unit, cur.pos, cur.meaning, cur.phonetic, a);
+    rollTodayWrongIfNeeded(); g.todayWrongCount = (g.todayWrongCount||0) + 1; // ★ v22：答错算错误，今日错误事件 +1
     heard = 1;
   }
   // 【死账原则】totalCorrect/totalWrong 不再靠 += 累加（会与账本 drift），
@@ -11805,7 +11957,7 @@ function addWrong(word,book,unit,pos,meaning,phonetic,userInput){
   // 错词一律绑定【当前学习册】(g.book)，而非单词原始册：避免从"高考3500词/选必一"等册听写时
   // 把错词记到非当前册，导致错词本按册作用域过滤时丢失/跨册数据来源混合。
   var bindBook = g.book || book || "";
-  if(!g.wrongBook[word]){ g.wrongBook[word] = {count:0,fixed:false,book:bindBook,unit:unit||"",pos:pos||"",meaning:meaning||"",phonetic:phonetic||"",updated:now,lastInput:""}; }
+  if(!g.wrongBook[word]){ g.wrongBook[word] = {count:0,fixed:false,book:bindBook,unit:unit||"",pos:pos||"",meaning:meaning||"",phonetic:phonetic||"",updated:now,createdAt:now,lastInput:""}; }
   g.wrongBook[word].count++; g.wrongBook[word].fixed = false; g.wrongBook[word].updated = now;
   // 若本次绑定的册更"新"（当前册），同步更新 book 字段，把历史空册/异册错词逐步归到当前册
   if(bindBook && !g.wrongBook[word].book){ g.wrongBook[word].book = bindBook; }
@@ -11944,57 +12096,103 @@ function getWrongInScope(mode){
   return getWrongInScopeAll(mode);   // v20：改错统计改为全册（不分册），详见 getWrongInScopeAll / aggregateWrongByBook
 }
 
-// 检测跨月：是否存在「早于本月起点」的未改正错词（用于红字标注）
+// ★ v23：跨月继续改错 = 「上月未改完量」。
+//   语义：本月起点之前首次出错的、且至今未改正的错词数（严格 < 本月1号0点，不含本月新错词）。
+//   时间基准改用 createdAt（首次出错时间），隔离 updated 被同步链路批量刷新的污染；
+//   固定锁"上月"，不随日/周/月标签切换。
 function hasCrossMonthWrong(){
-  var monthStart = getRangeStartTs("month");   // 本月1号0点
+  var monthStart = getRangeStartTs("month");   // 本月1号0点（北京时间）
   return Object.values(g.wrongBook||{}).some(function(x){
     if(!x || isDiagnosticBook(x.book||"")) return false;
-    if(x.fixed) return false;                       // 已改正不计入
-    return (x.updated||0) < monthStart;             // 有错词跨越到本月仍未改 → 跨月
+    if(x.fixed) return false;                        // 已改正不计入
+    return createdAtOf(x) < monthStart;              // 首次出错在上月（或更早）且仍未改 → 跨月
   });
+}
+// ★ v23：上月未改完量 = 严格早于本月起点的未改正错词数（整数，供「跨月继续改错」卡片直接显示）
+function getLastMonthUnfixedCount(){
+  var monthStart = getRangeStartTs("month");
+  var n = 0;
+  Object.values(g.wrongBook||{}).forEach(function(x){
+    if(!x || isDiagnosticBook(x.book||"") || x.fixed) return;
+    if(createdAtOf(x) < monthStart) n++;
+  });
+  return n;
 }
 
 function updatePeriodFix(){
-  var mode = g.rangeMode||"day";
-  // ★ 顶部总量（不分册）= 全册所有错词 ∩ 时间窗口
-  var scoped = getWrongInScopeAll(mode);
-  var err = scoped.length;
-  var fx  = scoped.filter(function(x){ return x.fixed; }).length;
-  // ★ v20.8（A方案·纯事件计数）：「今日改错」= 今天真实改对事件数，有一个算一个；
-  //   没改=0，次日没改依旧=0。与时间戳(fixedAt/updated)彻底解耦——
-  //   无论 syncPull / 导入 / 回填怎么刷 updated，今日改错只认「今日计数器」。
-  //   清零：北京时间每日 0:00:00（rollTodayFixIfNeeded 在每次读写前按 todayFixDate 键判定）。
+  var mode = g.rangeMode||"day";   // day / week / month（当前标签）
+  // ★ v23 口径（B方案，用户定稿 2026-09-01）：
+  //   ┌──────────────┬────────────────────────┬──────────┐
+  //   │ 卡片         │ 定义                  │ 随标签切 │
+  //   ├──────────────┼────────────────────────┼──────────┤
+  //   │ 错误         │ 当月错误总量          │ 锁月     │
+  //   │ 已改正       │ 当日(周期)已改正总量  │ 切(日/周/月)│
+  //   │ 未改正       │ 当日(周期)未改正总量  │ 切       │
+  //   │ 改正率       │ 当日(周期)改正率      │ 切       │
+  //   │ 今日改错     │ 当日改对总量          │ 锁今日   │
+  //   │ 今日错误     │ 当日错误总量          │ 锁今日   │
+  //   │ 月错误量     │ 当月错误总量          │ 锁月(=错误)│
+  //   │ 跨月继续改错 │ 上月未改完量          │ 锁上月   │
+  //   └──────────────┴────────────────────────┴──────────┘
+  //   时间基准：createdAt（首次出错时间，永不变），隔离 updated 同步污染。
+  //   清0规则：日次日清0 / 周次周清0 / 月=全册是否改完（全部改完次月清0；未改完跨月累积）。
+
+  // —— 错误 / 月错误量 = 当月错误总量（锁死"月"，无视当前标签）——
+  // 当月窗口 = [本月1号0点, 此刻]，基于 createdAt 判定（getFixSince("month") 已含全册改完次日起点）
+  var monthSince = getFixSince("month");
+  var monthAll = Object.values(g.wrongBook||{}).filter(function(x){
+    if(!x || isDiagnosticBook(x.book||"")) return false;
+    return createdAtOf(x) >= monthSince;           // 本月（含清零起点）出错的所有错词
+  });
+  var err = monthAll.length;                       // ★ 错误 = 当月错误总量（锁月）
+  var errUnfixed = monthAll.filter(function(x){ return !x.fixed; }).length;
+
+  // —— 已改正 / 未改正 / 改正率 = 当日(周期)口径，随标签切换 ——
+  // 周期窗口起点：日=今日0点 / 周=本周一0点 / 月=本月1号0点（getFixSince 对应 mode）
+  var periodSince = getFixSince(mode);
+  var periodAll = Object.values(g.wrongBook||{}).filter(function(x){
+    if(!x || isDiagnosticBook(x.book||"")) return false;
+    return createdAtOf(x) >= periodSince;
+  });
+  var fx  = periodAll.filter(function(x){ return x.fixed; }).length;   // ★ 已改正 = 当日(周期)已改正
+  // ★ 未改正(B方案)：纯同周期口径 = 当日(周期)错词 − 当日(周期)已改正
+  //   注：err(锁月) 与 (err-fx)(随周期) 仅在「日」标签下相等；周/月标签下周期 ⊂ 月，故 未改正 ≤ 月未改正。
+  var unfix = periodAll.length - fx;               // ★ 未改正 = 当日(周期)未改正
+  if(unfix < 0) unfix = 0;
+
+  // ★ v20.8（A方案·纯事件计数）：今日改错 = 今天真实改对事件数，锁"今日"
   rollTodayFixIfNeeded();
   var todayFix = g.todayFixCount||0;
-  // ★ 任务1：顶部 = 全册（与册无关、固定），含 总/已改正/未改正/改正率
-  document.getElementById("pError").textContent = err;
-  document.getElementById("pFixed").textContent = fx;
-  document.getElementById("pUnfix").textContent = err - fx;
-  document.getElementById("pTodayFix").textContent = todayFix;
-  document.getElementById("pFixRate").textContent = err ? Math.round(100*fx/err)+"%" : "0%";
-  // 月错误量：本月(清零起点~此刻)内未改正的错词
-  var monthScoped = getWrongInScopeAll("month");
-  var monthErrCount = monthScoped.filter(function(x){ return !x.fixed; }).length;
-  var elPME = document.getElementById("pMonthError");
-  if(elPME){ elPME.textContent = monthErrCount; }
+  // ★ v22：今日错误 = 今天答错+跳过事件数，锁"今日"
+  rollTodayWrongIfNeeded();
+  var todayWrong = g.todayWrongCount||0;
+  var elPTW = document.getElementById("pTodayWrong");
+  if(elPTW) elPTW.textContent = todayWrong;
 
-  // ★ 任务2：跨月红字标注
+  // —— 渲染顶部卡片 ——
+  document.getElementById("pError").textContent = err;              // 错误 = 当月错误总量
+  document.getElementById("pFixed").textContent = fx;               // 已改正 = 当日(周期)
+  document.getElementById("pUnfix").textContent = unfix;            // 未改正 = 当日(周期)
+  document.getElementById("pTodayFix").textContent = todayFix;      // 今日改错（锁今日）
+  // ★ 改正率 = 当日(周期)改正率 = 已改正 ÷ 当日(周期)错误总量；空时显示 0%
+  var periodTotal = periodAll.length;
+  document.getElementById("pFixRate").textContent = periodTotal ? Math.round(100*fx/periodTotal)+"%" : "0%";
+  // ★ 月错误量 = 当月错误总量（锁月，= 错误；保留卡片以维持视觉稳定性，label 明示"月"）
+  var elPME = document.getElementById("pMonthError");
+  if(elPME){ elPME.textContent = err; }
+
+  // ★ 跨月继续改错 = 上月未改完量（严格 < 本月1号0点 的未改正错词，锁"上月"）
   var elCross = document.getElementById("pCrossMonth");
   if(elCross){
-    if(hasCrossMonthWrong()){
-      var oldest = null;
-      var monthStart = getRangeStartTs("month");
-      Object.values(g.wrongBook||{}).forEach(function(x){
-        if(!x||x.fixed||isDiagnosticBook(x.book||"")) return;
-        if((x.updated||0) < monthStart && ((x.updated||0) < oldest || oldest===null)) oldest = x.updated;
-      });
-      var months = oldest ? Math.max(1, Math.ceil((Date.now()-oldest)/2592000000) ) : 1;
-      elCross.textContent = "跨"+months+"月·继续改错";
+    var lastMonthN = getLastMonthUnfixedCount();
+    if(lastMonthN > 0){
+      elCross.textContent = "上月未改完 "+lastMonthN;
       elCross.style.color = "#ef4444";
       elCross.style.display = "";
     } else {
-      elCross.textContent = "";
-      elCross.style.display = "none";
+      elCross.textContent = "本月无跨月";
+      elCross.style.color = "#94a3b8";
+      elCross.style.display = "";
     }
   }
 
@@ -12031,6 +12229,23 @@ function ymdOfTs(ts){
     String(bj.getUTCMonth()+1).padStart(2,"0")+"-"+
     String(bj.getUTCDate()).padStart(2,"0");
 }
+// ★ v23（2026-09-01）：「首次出错时间」createdAt —— 错词本的时间基准字段。
+//   语义：一条错词第一次被记错的时刻，写入后永不再改（与 updated 相对：updated 会被 syncPull/导入 批量刷新）。
+//   用途：改错统计的时段过滤（错误/已改正/未改正/改正率/月错误量/跨月）一律改用 createdAt，
+//         从而 syncPull/导入 再怎么刷 updated，改错统计的"日/周/月"窗口也不会乱跳。
+//   写入点：addWrong（新错词，createdAt 缺失时赋值 = 此刻）、mergeOneWord（取早者）、
+//           _wbEntryDefaults（兜底）、applySnapshotText（导入补全）、loadState（回填）。
+//   读取点：getWrongInScopeAll / aggregateWrongByBook / hasCrossMonthWrong / renderFixBreakdown 恒等式。
+//   向后兼容：历史条目无 createdAt → createdAtOf() 回落 updated → 再回落 0（视为"极早期，落在所有窗口内"）。
+function createdAtOf(x){
+  var n = Number(x && x.createdAt);
+  if(n > 0) return n;
+  n = Number(x && x.updated);          // 回落 updated（兼容 v22 及更早）
+  return n > 0 ? n : 0;
+}
+// 毫秒时间戳 → 北京时间 YYYY-MM-DD（复用 bjYMD，与 ymdOfTs 同源但只读 createdAt）
+function bjYMDOfTs(ts){ return bjYMD(ts); }
+
 // ★ v20.6：返回某时间戳对应【北京时间当日 00:00:00.000】的毫秒时间戳。
 //   用于回填时把"整批簇"的虚假精确秒对齐到日0点，也供今日窗口边界复用。
 //   实现原则：与 todayYMD() 完全同源——先把 ts 转成"北京时间 YYYY-MM-DD"字符串，
@@ -12159,24 +12374,28 @@ function aggregateByBook(mode){
 //                (a) 全部改正+次日0点清空 = 整个 wrongBook（全册）
 
 // ---- 改错统计·顶部总量（不分册）单一事实源 ----
-// 与「分册明细」的唯一区别：不过滤 g.book，统计全册所有错词
+// ★ v23：时段过滤改用 createdAt（首次出错时间），隔离 updated 被同步链路批量刷新。
+//   窗口 = [getFixSince(mode), 此刻)，其中 month 模式已含「全册改完次日起点」推进。
+//   注：v23 口径下 updatePeriodFix 顶部直接内联计算（锁月/周期分离），
+//   本函数主要供 分册明细 aggregateWrongByBook / 导出诊断 / 单元测试 复用。
 function getWrongInScopeAll(mode){
   mode = mode || g.rangeMode || "day";
-  var since = getFixSince(mode);     // ★ 任务2：清零起点（不按月翻窗）
+  var since = getFixSince(mode);     // 日=今日0点 / 周=本周一0点 / 月=清零起点
   return Object.values(g.wrongBook||{}).filter(function(x){
     if(!x || isDiagnosticBook(x.book||"")) return false;   // 排除连通测试探针
-    return (x.updated||0) >= since;                          // ★ 落在「清零起点 ~ 此刻」窗口内
+    return createdAtOf(x) >= since;                          // ★ createdAt 判定，非 updated
   });
 }
 
 // ---- 改错统计·分册明细：按册分组（全册，不过滤 g.book）----
+// ★ v23：改用 createdAt 判定时段（与 getWrongInScopeAll 同源）
 function aggregateWrongByBook(mode){
   mode = mode || g.rangeMode || "day";
   var since = getFixSince(mode);
   var map = {};
   Object.values(g.wrongBook||{}).forEach(function(x){
     if(!x || isDiagnosticBook(x.book||"")) return;
-    if((x.updated||0) < since) return;
+    if(createdAtOf(x) < since) return;
     var book = x.book || "未分册";
     if(!map[book]) map[book] = {total:0, fixed:0};
     map[book].total++;
@@ -12226,12 +12445,12 @@ function renderFixBreakdown(mode){
       var m = map[bk];
       var unfix = m.total - m.fixed;
       var rate = m.total ? Math.round(100*m.fixed/m.total)+"%" : "0%";
-      // 跨月红字（该行册有早于本月起点的未改正错词）
+      // ★ v23：跨月红字（该行册有上月未改完的错词，基于 createdAt 判定）
       var cross = "";
       if(hasCrossMonthWrong && hasCrossMonthWrong()){
         var has = Object.values(g.wrongBook||{}).some(function(x){
           if(!x||x.fixed||isDiagnosticBook(x.book||"")) return false;
-          return x.book===bk && (x.updated||0) < monthStart;
+          return x.book===bk && createdAtOf(x) < monthStart;
         });
         if(has) cross = ' <span style="color:#ef4444;font-size:11px">跨月</span>';
       }
@@ -12242,16 +12461,21 @@ function renderFixBreakdown(mode){
     });
     html += '</tbody></table>';
   }
-  // ★ 恒等式自检：顶部(全册) ≥ 明细之和（仅 console 报警）
+  // ★ v23 恒等式自检：顶部(全册, getWrongInScopeAll) ≥ 明细之和(aggregateWrongByBook)。
+  //   因两者现均基于 createdAt 同一时段窗口、且明细按册拆分，正常应 ≡（严格相等）；
+  //   允许顶部略大（含「未分册」兜底行），但不应出现 明细 > 顶部。
+  //   ★ 修复旧版形同虚设问题：旧版 topTotal 用 getFixSince 窗口、sumDetail 用 map，
+  //     两值口径完全一致导致几乎永不等报警；现显式分别用「窗口过滤」与「按册聚合」两套路径交叉校验。
+  var since = getFixSince(mode);
   var topTotal = 0;
   Object.values(g.wrongBook||{}).forEach(function(x){
     if(!x||isDiagnosticBook(x.book||"")) return;
-    if((x.updated||0) >= getFixSince(mode)) topTotal++;
+    if(createdAtOf(x) >= since) topTotal++;
   });
   var sumDetail = 0;
   books.forEach(function(bk){ sumDetail += map[bk].total; });
-  if(sumDetail > topTotal){
-    console.warn("[改错恒等式] 明细之和("+sumDetail+") > 顶部总量("+topTotal+") mode="+mode);
+  if(sumDetail > topTotal + 1){   // +1 容差（未分册兜底）
+    console.warn("[改错恒等式] 明细之和("+sumDetail+") > 顶部总量("+topTotal+") mode="+mode+"（createdAt 口径不一致，需排查）");
   }
   el.innerHTML = html;
 }
@@ -12564,6 +12788,7 @@ function exportJSON(){
     // ★ v21（E-5）：补全导出字段，保证换设备导入【零丢失】（原版缺遍数历史/今日改错/册完成日期）
     passCount: g.passCount||{}, bookCompletedDate: g.bookCompletedDate||{}, passArchive: Array.isArray(g.passArchive)?g.passArchive:[],
     todayFixCount: (g.todayFixCount||0), todayFixDate: g.todayFixDate||"", allFixedDate: g.allFixedDate||"",
+    // ★ v23：createdAt 随 wrongBook 各条目导出（首次出错时间，永不变），导入端据此做时段过滤/取早合并
     // 版本号与时间戳一并导出：导入端据此判断新旧，实现冲突检测
     dataVersion: g.dataVersion||0, updatedAt: g.updatedAt||0}; })();
   var blob = new Blob([JSON.stringify(data,null,2)], {type:"application/json"});
@@ -12952,6 +13177,8 @@ async function syncPush(manual){
         last_input:(wd.lastInput||""), wrong_count:(wd.count||1),
         fixed:(!!wd.fixed),
         fixed_at:(wd.fixedAt ? new Date(wd.fixedAt).toISOString() : (wd.updated ? new Date(wd.updated).toISOString() : null)),
+        // ★ v23：created_at = 首次出错时间（与 updated 分离），云端据此做时段过滤/跨设备合并取早
+        created_at:(wd.createdAt ? new Date(wd.createdAt).toISOString() : (wd.updated ? new Date(wd.updated).toISOString() : null)),
         book:(wd.book||""), unit:(wd.unit||"")
       });
     });
@@ -13081,7 +13308,7 @@ async function syncPull(manual){
         // 🔒 过滤诊断探针错词（如 __连通测试_wrong_xxx），不进入正常错词本
         var rw = String(r.word||"");
         if(isDiagnosticBook(rw) || isDiagnosticBook(String(r.book||""))) return;
-        if(!g.wrongBook[rw]){ g.wrongBook[rw]={count:0,fixed:false,updated:Date.now(),lastInput:"",meaning:"",phonetic:"",pos:""}; }
+        if(!g.wrongBook[rw]){ g.wrongBook[rw]={count:0,fixed:false,updated:Date.now(),createdAt:(r.created_at?Number(r.created_at)||0:0)||Date.now(),lastInput:"",meaning:"",phonetic:"",pos:""}; }
         // ★ 批次B（v20.9）：字段级条件合并，替代原 "wrong_count>count" 大门控。
         // 原门控缺陷：count 相等（典型场景——设备B改正了错词但错次未增）时整段跳过，
         //   fixed/meaning/fixed_at 等字段永远无法从云端回落到本设备。
@@ -13113,6 +13340,12 @@ async function syncPull(manual){
           if(r.pos) _wb.pos=r.pos;
           if(r.book) _wb.book=r.book;
           if(r.unit!=null) _wb.unit=r.unit;
+          // ★ v23：createdAt = 首次出错时间，取早者（本地/云端谁更早谁为准，永不被刷新）
+          var _cloudCA = Number(r.created_at)||0;
+          var _lca = _wb.createdAt||0, _rca = _cloudCA||(_wb.createdAt||0);
+          if(_lca && _rca){ _wb.createdAt = Math.min(_lca, _rca); }
+          else if(_lca || _rca){ _wb.createdAt = _lca || _rca; }
+          else { _wb.createdAt = _wb.updated||0; }
           merged=true;
         } else {
           // 本地更新时间更晚：仅把云端可能更新的"更高 count"与"OR 后的 fixed"吸收进来
@@ -14002,12 +14235,15 @@ function saveState(){/* v21 (脏标记·P0-3) : 写前校验保留；调用即�
       //   「错词本自动清空永远再等一天」：刷新后 allFixedDate='' 被重算，getFixSince 的"清零次日"锚点失效。
       allFixedDate: g.allFixedDate||"",
       todayFixDate: g.todayFixDate||"", todayFixCount: (g.todayFixCount||0),
+      todayWrongDate: g.todayWrongDate||"", todayWrongCount: (g.todayWrongCount||0),
       // 数据版本号与时间戳随状态一起持久化，导入时可据此判断是否回退
       dataVersion: g.dataVersion, updatedAt: g.updatedAt, deviceId: g.deviceId};
     localStorage.setItem("vocab_state", JSON.stringify(s));
     // ★ v20.8：今日改错计数器用独立 key 持久化（不参与云端 LWW 合并，杜绝同步污染）。
     //   键含 todayFixDate，天然实现「次日0点归0」：次日 todayFixDate 变化即视为新的一天。
     try{ localStorage.setItem("vocab_today_fix", JSON.stringify({d:g.todayFixDate, c:(g.todayFixCount||0)})); }catch(e){}
+    // ★ v22：今日错误计数器用独立 key 持久化（与今日改错对称），不参与云端 LWW 合并，杜绝同步污染。
+    try{ localStorage.setItem("vocab_today_wrong", JSON.stringify({d:g.todayWrongDate, c:(g.todayWrongCount||0)})); }catch(e){}
     // 自动备份（节流：至少间隔60秒才写一份新备份）
     var lastTs = parseInt(localStorage.getItem("vocab_last_backup_ts")||"0");
     if(Date.now() - lastTs > 60000) autoBackup();
