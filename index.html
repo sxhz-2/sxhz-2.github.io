@@ -1,565 +1,5 @@
 <!DOCTYPE html>
-<!--
-================================================================================
-  单词听写应用 · 自描述说明（SELF-DESCRIPTION HEADER）
---------------------------------------------------------------------------------
-  version : 2026-09-22 · v26（「同步打断听写→看A判B」根治：答题会话保护 + 队列级判定保险丝 + 跳过语义收紧）
-  上一基线：v25（「填对判错/听A判B」终局修复：输入法组词防护 + 残留答案保险丝 + 判定即静音）→ v24.2 → v24.1 → v24 → v23（改错统计口径重构）
-  说明：本文件 = 用户真实运行文件（手机端）的本地副本。
-  状态    ：可用于日常背诵 + 可作为新对话的接续基线
-  定稿原则：以「指令原文 + 截图反推 + 真实导出数据复现」为唯一依据，此后不再横跳；
-           恒等式编译期强制、漂移自动修平。
-
-【v24 本轮修复（2026-09-18 · 用户实测反馈：改错时「把对的判错」+ 有时「不下一个」）】
-  依据：用户真机反馈 + 抽取真实源码在沙盒中做时序复现（repro_test.js，旧版全红/新版全绿）。
-  根因1（把对的判错 · P0-3）：replayCurrent() 取 g.remain[g.idx-1]。
-        checkAnswer 判定后已 g.idx++，故 idx-1 = 【上一题（已答完的词）】——
-        点「再听」听到的是上一个词、结束后回写的也是上一个词的中文释义，
-        而 checkAnswer 判的是当前题 remain[idx] → 用户按"听到的词"输入正确拼写却被判错。
-        （错词/改错模式下用户更依赖「再听」，故在该模式最明显。）
-        附带：原 `if(g.idx<=0) return;` 使第一题永远无法重播。
-  根因2（不下一个 · P0-1/P0-2）：nextQ 的「自动提交」与 checkAnswer 的「推进下一题」
-        共用同一个句柄 g._t。上一题朗读 promise 收尾时执行 clearTimeout(g._t)，
-        若此刻「推进下一题」的定时器尚未触发即被误杀；随后补上的自动提交
-        checkAnswer("") 又撞上防重复判定 `if(g._answered) return;` 直接返回
-        → 再无任何定时器推进 → 界面永久停在当前题，点任何键都没反应。
-  根因3（判错 · P0-4）：过期朗读 promise 仍以「会话级 seq」为唯一校验，
-        会在【新题】上重新设置自动提交定时器，导致新题还没读完就被判「跳过」。
-  改动（6 处，答题链路内聚，统计口径零改动）：
-    1. replayCurrent：改取 g.remain[g.idx]（当前题）；删除 `if(g.idx<=0) return;`
-       改为 `if(!cur) return;`；重播期间暂停并续接自动提交倒计时。
-    2. 定时器拆柄：g._autoT（自动提交） / g._nextT（推进下一题），不再共用 g._t；
-       checkAnswer 末尾只写 _nextT，任何朗读 promise 都不得再误杀它。
-    3. 新增题级序号 g._qSeq（nextQ 每次 +1）：nextQ / replayCurrent 的朗读 promise
-       回调与自动提交均校验 qSeq，过期 promise 一律静默作废（不设定时器、不回写旧题）。
-    4. checkAnswer 的「已判定」分支：由静默 return 改为【提前推进】(clearTimeout + nextQ)，
-       按钮永远有反应，死锁在结构上不可能发生。
-    5. nextQ / replayCurrent 开头：若上一题仍在朗读(g._speaking)则 speechSynthesis.cancel()，
-       杜绝旧音频混入新题（听到两个词 → 听错 → 判错）；doSpeakSequence 维护 _speaking 计数。
-    6. startQuiz / startWrongMode / endQuiz：统一清理三个句柄并重置 _qSeq / _answered / _speaking
-       （修复"上一轮残留 _answered=true 使新一轮首次提交被当成重复提交而丢弃"）。
-  不变量（repro_test.js 四场景断言全绿）：
-   · 场景A：点「再听」→ 重播与判定同题（旧版重播上一题 → 判错）
-   · 场景B：边听边提交 → 正常推进（旧版永久卡死，idx 不动）
-   · 场景C：新题朗读未结束不得判跳过（旧版在新题上误触发自动提交）
-   · 场景D：连续答对 3 题 → idx/correct 全对（旧版会丢 1 题）
-  明确不动：v23 改错统计口径、createdAt 治理、今日错误/今日改错事件计数、日周月分化、
-           时区闭环(+08)、账本恒等式自检 —— 全部保留，零改动。
-
-【v24.1 追加（2026-09-18 · 错词队列释义兜底 + 更正上一轮误判）】
-  ★ 更正：v24 交付时曾据「29 份 autoBackups 中 2026-08-24 那一份旧快照」判定
-    organise/description/butterfly/butterflies in one's stomach. 释义为空。
-    经复核（check_enrich.js 抽取真实 VOCAB_DATA + 真实 state 执行 enrichWrongBook）：
-      · 当前存档 state.wrongBook 96 条，释义缺失 = 0 条（enrichWrongBook 早已回填生效）
-      · 用同一份旧快照做压力测试：4 条空释义 → 回填 4 条，全部成功
-    → 「当前释义为空」的判断不成立，系误读历史备份所致，特此更正，数据未做任何改动。
-  本轮实际改动（1 处，防御性闭环，不改任何现有数据）：
-    startWrongMode 构建错词队列前，对 meaning/phonetic 缺失的条目用 resolveWordInfo
-    从 VOCAB_DATA 补齐（只补不覆盖），并写回 wrongBook 持久化。
-    理由：错词本列表(wrongItemHtml)早有此兜底，唯答题队列直接取 p[1].meaning；
-          补齐后二者口径一致，杜绝「外部导入/自定义词表/未来新增错词」时
-          错词听写没有中文提示、只能靠听、反复答错却无法改正。
-  不变量：
-   · 只补不覆盖：已有释义/音标/词性一律保留，绝不改写用户数据
-   · 词库中查不到的词：保持原样（不臆造释义），行为与修复前一致
-   · 回填条数为 0 时不触发 saveState，无多余写入
-
-【v24.2 本轮修复（2026-09-18 · 用户反馈：听写/改错时「听的是一个词，判的却是另一个词」）】
-  依据：用户真机反馈 + tts_repro.js（模拟真实 speechSynthesis FIFO 队列，
-        cancel 可信度可配置，虚拟用户「听到英文词→反应 reactMs→提交」）。
-        v24.1 基线在 slow-react 类配置下稳定复现「听到 banana 却判 orange」。
-  根因（P0-5）：朗读链只校验【会话级】_seq，而 _seq 仅在 startQuiz/endQuiz 才变，
-        换题(nextQ)时保持不变 → 上一题未播完的朗读链在换题后继续往下走：
-        speak(中文词性) → speak(中文释义) → 第2遍英文，全部混入新题音频。
-        用户于是「又听到一遍旧词」，按旧词作答却打到新题上 = 听A判B。
-        典型触发：朗读遍数≥2 且用户在朗读中途或刚读完就提交（越慢越容易撞上）。
-  改动（5 处，全部在朗读链内，统计口径零改动）：
-    1. speak(text, lang, qseq)：新增第三参，题级不匹配直接 resolve（不发声）。
-    2. doSpeakSequence(cur, qseq)：新增第二参，内部 _owner/_alive() 贯穿整条链，
-       换题后「下一步 speak 之前」即拦停，绝不把旧词（尤其第2遍英文）播进新题；
-       每一步 speak 都带 _owner。
-    3. 新增 clearSpeech()：cancel() 后再 resume()（安卓 WebView 上 cancel 后引擎
-       可能滞留 paused，导致后续 speak 静默失效、整场不再发声）。
-    4. nextQ：无条件 clearSpeech()（原为 `if(_speaking)` 才 cancel，会漏掉
-       「旧链已 resolve 但 utterance 仍在排队」的场景），并把 qseq 传给朗读链。
-    5. replayCurrent：重播也递增 _qSeq 并 clearSpeech()，
-       使上一遍未播完的旧链立即失效，杜绝「两条链同时读同一个词」的音频交叠。
-  不变量（tts_repro.js 多配置 + repro_test.js 四场景，修复版全绿）：
-   · 慢反应·读2遍 / 读3遍 / cancel可靠 / 带自动提交：基线错位 1~2 次 → 修复版 0 次
-   · 场景A「再听」同题、场景B 边听边提交能推进、场景C 新题读完才计时、场景D 不丢题
-   · 换题后旧链零新增发声（最多残留一条正在播的旧音频，属引擎限制，无法避免）
-  明确不动：v24/v24.1 全部时序修复、v23 改错统计口径、createdAt 治理、
-           今日错误/今日改错事件计数、日周月分化、时区闭环(+08)、账本恒等式 —— 保留。
-
-【v25 本轮修复（2026-09-20 · 用户实测反馈：听写"部门"填正确拼写 ministry 被判错，正确答案显示 further；
-             附真机录屏：填 obtain 判错"正确答案 treatment"，且下一题 (2/6) 又出 obtain）】
-  依据：用户指令 + 真机录屏逐帧取证 + 词库复核（ministry/further、treatment/obtain 均为
-        必修三第2单元【紧邻词】，判定词总是"听到的/输入的词"的相邻题 → 「听A判B」残留类）。
-  根因（四条通道都汇向同一症状：作答依据与判定对象错开一题）：
-    · P0-6 输入法组词：安卓中英混输键盘打英文走组词流程，按 Enter「确认上屏」的 keydown
-      同样 key==="Enter"（keyCode 229 / isComposing），原版当成提交 → 组词期 value 未写入
-      → 空提交把本题记「跳过」；随后 nextQ 清空输入框，组词文本经 IME「复活」在下一题
-      → 旧词判新题（ministry→further 的直接推手）。
-    · P0-7 自动提交抢答：autoSec 到点 checkAnswer("") 会回退读取 qInput.value ——
-      用户还在组词/语音识别中（interim 半截结果）也会被"交卷判错"（obtain→treatment 推手）。
-    · P0-9 判定后朗读链不断流：判定后 _qSeq 不变，本题第2遍英文/中文释义在反馈停留期
-      继续读并漏进下一题（引擎 cancel 对「正在播」条目无效，v24.2 已自认此限制）
-      → 用户听旧词打旧词、被判到新题（further/ministry 串题推手）。
-    · P0-10 语音识别结果无题级校验：按住说话松手后识别结果常晚到 1~3 秒，
-      换题后写入新题输入框 → 一按 Enter 旧词判新题。
-  改动（7 处，统计口径零改动；账本/今日错误/今日改错/日周月分化全部保留）：
-    1.（P0-6）qInput keydown 过滤 e.isComposing / keyCode===229 —— 「确认上屏」不再被当提交；
-       新增 compositionstart/end 跟踪 g._composing。
-    2.（P0-7）新增 autoSubmitGuard(seq,qseq)：组词中/识别中自动提交每秒顺延不交卷；
-       nextQ 与 replayCurrent 的 _autoT 均改走守门。
-    3.（P0-9）checkAnswer 判定即 clearSpeech() + g._qSeq 自增 —— 本题朗读链立刻断流，
-       第2遍英文/释义不再漏进反馈期与下一题（_nextT 的 qseq 在其后捕获，推进不受影响）。
-    4.（P0-8）「上一题的答案」保险丝：输入归一化后【逐字等于刚判定的上一题的词】且不匹配
-       本题 → 不判错/不记跳过/不入错词本/不计今日错误，清输入重播本题让用户重答；
-       判定完成时记录 g._prevQuizWord。队列重复词、正常对错判定完全不受影响。
-    5.（P0-10）语音识别：结果回调按「开始识别时的 seq+qSeq」校验，换题后晚到结果一律丢弃；
-       识别期间 g._voiceActive=true 供守门顺延；onend/onerror/stop 复位。
-    6.（P2-1）反馈停留期点「再听」：原版读到 remain[idx]=下一题的词（idx 已 ++），
-       改为重播【刚判定的词】且只播音频，不改题面、不续自动提交。
-    7.（P2-2）「应为 xxx」乱码修复：highlightWrongInput 的 missing 残串只对近似词有意义
-       （真机实锤 obtain vs treatment → "retmet" 纯乱码误导），LCS 相似度过低时不再输出。
-  不变量（回归测试全绿，见 repro_v25.js）：
-   · ministry 场景：残留输入 ministry 撞上 further → 保险丝拦截，further 不计错，重播重答
-   · obtain 场景：残留输入 obtain 撞上 treatment → 同上；treatment.wrongBook 零写入
-   · 正常答对/答错/跳过/错词改错：行为与 v24.2 完全一致
-   · 判定后旧朗读链 _alive()=false：第2遍英文不再进入反馈期/下一题
-   · 组词中自动提交：顺延不交卷；组词结束/换题后恢复原语义
-   · highlightWrongInput：近似词仍给字母级 diff；完全不同的词不再输出乱码残串
-  明确不动：v24/v24.1/v24.2 全部时序修复、v23 改错统计口径、createdAt 治理、
-           今日错误/今日改错事件计数、日周月分化、时区闭环(+08)、账本恒等式 —— 保留。
-
-【v26 本轮修复（2026-09-22 · 用户真机录屏逐帧取证：错词听写题面「物种」输入 species，
-             点「下一题」被判「✗ 答错了 / 正确答案 Gregorian calendar」并收入错词本；
-             录屏开头出现 toast「更新 199 词（传入版本较旧，已自动合并，未覆盖本地）」）】
-  依据：真机录屏逐帧时序 + applySnapshotText/syncPull 源码走读。
-  根因（P0-11 队列级串题，v25 P0-8 答案级保险丝拦不住）：
-    自动同步 setInterval（及 push 后回拉、文件导入）在【听写进行中】触发
-    applySnapshotText 合并 → buildQueue() 把正在作答的 g.remain 整个换成普通词池、
-    g.idx 被快照题号改写、g.correct/g.wrong 被覆盖 —— 而答题界面与题面纹丝不动。
-    此后用户对着旧题面作答（物种→species 完全正确），checkAnswer 却拿
-    新队列 remain[g.idx]（Gregorian calendar）判卷 → 必判错 + 误入错词本 +
-    今日错误+1 + 账本污染。录屏中「(5/30)」的 30 题队列与错词本「3 未改正/8 总」
-    自相矛盾，即队列被中途换掉的铁证。
-  改动（4 处，统计口径零改动；v25 全部修复保留）：
-    1.（P0-11a）新增 quizSessionActive()：听写进行中（quizBox 可见且未 abort）为 true。
-    2.（P0-11b）applySnapshotText：答题进行中跳过一切会话级写入——
-       册/单元切换、onBookChange、buildQueue()、correct/wrong 还原、_sessionDate/
-       reconcileSession、快照题号恢复。数据级合并（错词本/统计/已掌握）照常执行。
-    3.（P0-11c）题面指纹 + 队列级保险丝：renderCurrentWord 记录 g._curQWord；
-       checkAnswer 判定前校验 remain[g.idx].word 是否仍是用户看到的题，不符则
-       【不判定、不计错、不入错词本、账本零写入】，清空输入、重新对齐当前题并重播。
-    4.（P0-12）「跳过」语义收紧：qSkip 改走 checkAnswer("",{forceSkip:true})，
-       绝不把输入框残留文本拿来判卷（原版 checkAnswer("") 会回退读输入框，
-       点「跳过」实际成了「提交输入框内容」）；跳过即清空输入。
-       自动提交（autoSubmitGuard）保留「时间到交卷输入框内容」原语义。
-  不变量（repro_v26.js 断言全绿）：
-   · 答题中合并快照：g.remain/g.idx/g.correct/g.wrong/g.book/g.unit 现场不变，
-     错词本/统计仍照常合并；题面词作答 → 判定对象与题面一致
-   · 模拟队列被换后提交：不判错、wrongBook 零写入、todayWrongCount 零增量
-   · 输入框有残留时点「跳过」：一律记跳过（今日错误+1、入错词本），不按残留内容判对/判错
-   · 正常答对/答错/跳过/错词改错/自动提交：行为与 v25 完全一致
-  明确不动：v24/v24.1/v24.2/v25 全部时序修复、v23 改错统计口径、createdAt 治理、
-           今日错误/今日改错事件计数、日周月分化、时区闭环(+08)、账本恒等式 —— 保留。
-
-【二、版本】
-  v22 新增（2026-09-01 · 本轮，今日错误事件计数 + 月清0口径确认）：
-  依据：用户定稿口径——
-    ① 今日错误 = 今日错误总数，有一个算一个，跳过算错误
-    ② 今日改错 = 今日改正确数（v20.8 已定稿，本轮零改动保留）
-    ③ 清0规则：日次日清0 / 周次周清0 / 月=全册是否改完（全部改完次月清0；未改完跨月累积；全部改完次日清0）
-  改动（与今日改错 todayFixCount 完全对称，共 7 处 + HTML 1 行）：
-  1. 新增独立事件计数器：todayWrongDate(所属北京自然日) + todayWrongCount(当日错误事件数)
-     —— 答错 +1、跳过 +1，有一个算一个；markDone/改对路径不加（今日改错独立计数）
-  2. rollTodayWrongIfNeeded()：跨日(todayWrongDate≠今日)自动归0（每日0点语义），与 rollTodayFix 对称
-  3. 唯一写入点：checkAnswer 的「答错」与「跳过」两分支（真实作答事件）
-  4. 持久化：独立 key「vocab_today_wrong」{d,c}，saveState 写、loadState 恢复（跨日归0）；
-     不参与云端 LWW 合并，杜绝 syncPull 污染（与 vocab_today_fix 完全对称）
-  5. 读取(updatePeriodFix)：改错统计新增「今日错误」卡片(pTodayWrong)，与「今日改错」并列
-  6. 导出 JSON：存档对象新增 todayWrongDate/todayWrongCount 字段（完整可迁移）
-  不变量（均成立，verify.js 断言全绿）：
-   · 答错 +1、跳过 +1、改对 +0 → todayWrong = 今日真实错误事件数，有一个算一个
-   · 今日无真实作答 → todayWrongCount = 0（同步/导入/回填不触碰，绝不虚增）
-   · 次日0点 → todayWrongCount 归0（自然日切分，与今日改错同源）
-   · 今日错误 ⊥ 今日改错：二者独立计数、成对对称、互不干扰
-   · 月清0 = 全册 wrongBook 是否全部改完（不分册），与当前所选册无关 —— 代码 advanceFixClear 原已正确，零改动
-  明确不动：今日改错A方案(todayFixCount)、日周月分化、时区闭环(+08)、v21.1 恒等式、checkAnswer 作答链路 —— 全部保留。
-================================================================================
-
-【一、项目】
-  名称：外研版高中英语单词背诵（单词听写 Web App）
-  形态：单文件 HTML（结构 + 样式 + 逻辑全部内联，无构建步骤）
-  运行：浏览器直接打开即可；云端同步依赖 Supabase（CDN 引入）
-
-【二、当前版本】
-  version : 2026-08-30 · v21.2（修复答题按钮「点不了」：checkAnswer 中 bucket 在定义前赋值 _written 导致 TypeError，作答链路中断；写前拦截日志降级 warn）
-  上一基线：v20.8（今日改错 = 纯事件计数，A方案定稿）
-  说明：本文件 = 用户真实运行文件（手机端）的本地副本。
-  状态    ：可用于日常背诵 + 可作为新对话的接续基线
-  定稿原则：以「指令原文 + 截图反推 + 真实导出数据复现」为唯一依据，此后不再横跳；
-           恒等式编译期强制、漂移自动修平。
-
-【二之十二、v21 新增（2026-08-30 · 本轮，改错统计·日周月分化 + 时区闭环）】
-  依据：用户定稿口径——时间标准=北京时间，日/周/月=自然日/自然周/自然月；
-        日错词「有一个算一个、全部记入、次日0点清0」；周「次周0点清0」；
-        月「未改完不清0、跨月累积并标注跨月；全部改完+次日0点清0」。
-  问题：实测发现「改错统计·日/周/月 三处信息完全相同」。根因——
-        getRangeStartTs 把日期字符串 "YYYY-MM-DD" 当作毫秒传给 dayStartOfTs，
-        而 dayStartOfTs 内部 ymdOfTs(字符串)=Number→0 → 返回 0；
-        结果 日/周/月 窗口起点全部塌缩为 0，「updated>=0」永远成立，三窗口完全等价。
-  改动（3 处 + 注释，其余一字未动）：
-  1. dayStartOfTs 兼容双输入：① 毫秒时间戳（原回填/今日窗口）② "YYYY-MM-DD" 字符串
-     （getRangeStartTs 用法）。兜底分支也改为硬编码 +08，不再依赖系统 offset。
-  2. getFixSince 口径收敛：日/周 = 纯自然起点（次日/次周0点清0，不受清零推进影响）；
-     仅 月 叠加 allFixedDate 清零次日起点（未改完跨月累积、全部改完次日清空 wrongBook）。
-  3. todayStr 委托 bjYMD(Date.now())（批次C闭环）：stats 桶「唯一写入源」与读取侧同源，
-     硬编码 +08，非北京时区下不再与 todayYMD/bjYMD 分叉导致桶键错位。
-  不变量（均成立，fix_and_test.js 断言全绿）：
-   · getRangeStartTs: day=今日0点 / week=本周一0点 / month=本月1号0点（三者分化，不再同为0）
-   · getFixSince: 设 allFixedDate 后，day/week 起点不变，仅 month 推进到「清零次日」
-   · 顶部口径: 日 ≤ 周 ≤ 月（日/周自然窗口、月跨月累积），不再三值全等
-   · 今日改错(事件计数) = g.todayFixCount，与本次窗口修复正交、零改动、不受影响
-   · 跨月红字 hasCrossMonthWrong：存在「updated<本月1号」的未改正错词 → true
-
-【二之十三、v21.1 新增（2026-08-30 · 修复「账本自检·仍存在异常」误报）】
-  依据：真机截图——学习统计常驻黄字「🧮 已自动修平·仍存在异常」，控制台
-        `[账本自检] 剩余新词(180)≠册总量(262)−已听写去重(34)`，每次加载必现。
-  根因：verifyLedger 不变量1 用 `getHeardSet(bk, scopeUnit||"__all")` 取已听写数，
-        而 runLedgerCheck 传入 `g.unit`。当用户选中【具体单元】(g.unit="1" 等) 时：
-          · totalHeard = 该单元级 heard(34)，但
-          · bs.remain  = computeBookStats 内部固定册级 __all(262−82=180)
-        册级死账「剩余+当月≡cap」被混入单元级口径 → 恒成立失配 → 黄字必现。
-        （computeBookStats L10960 本就固定 __all，两侧本应同源，系历史遗漏。）
-  改动（仅 1 处，verifyLedger 不变量1）：
-        getHeardSet(bk, scopeUnit||"__all")  →  getHeardSet(bk, "__all")
-        注释明确：恒等式是【册级死账】，与单元选择无关；单元级一致性由其他调用方保证。
-  不变量（均成立）：
-   · 正常场景(g.unit 任意值)：remain 与册级 heardAll 一致 → 自检通过，黄字消失
-   · 真实漂移(remain 真对不上 heardAll)：仍正确报警，绝不掩盖真问题
-   · 恒等式「剩余新词 + 当月听写量 ≡ 册总量(cap)」口径唯一，死账恒等
-  明确不动：改错统计·日周月分化、时区闭环、今日改错A方案 —— 均非本轮问题，零改动。
-
-【二之十四、v21.2 新增（2026-08-30 · 本轮，修复答题按钮「点不了」）】
-  现象（用户手机截图反推）：正常听写 / 错词听写 进入答题区后，「下一题/跳过/再听/退出/按住说话」
-        全部功能键点不动；按钮本身存在且 onclick 已绑定，实为「点了无反应、答题卡死」。
-  根因：checkAnswer（约 L11715-11720）批次A重构时插入行导致顺序错乱：
-        g._todayWritten = today;
-        bucket._written = today;   ← bucket 此时尚未定义（TDZ/提前引用）
-        var bucket = getStatsBucket(today);  ← bucket 在此才定义
-        → TypeError: Cannot set properties of undefined (setting '_written')
-        → checkAnswer 中断，UI 无反馈 → 用户感知为「按钮点不了」。
-  关键：正常听写 与 错词听写 共用同一 checkAnswer → 两入口「同样点不了」，与截图完全一致。
-  改动（仅 1 处，零副作用）：
-    把「var bucket = getStatsBucket(today);」提到「bucket._written = today;」之前，
-    保证 bucket 定义后再写入自证标记。批次A（今日桶自证）语义完全保留。
-  连带清理（同类残留，非阻塞但致控制台泛红）：
-    saveState 内「v17 写前拦截」检测到累计漂移(totalCorrect/totalWrong vs byUnit之和)后
-    本就会自动修平并继续保存，但原用 console.error 级别 → 降级为 console.warn 并明确标注
-    「已自动修平·以账本为准，不影响保存」，真机控制台不再一片红。
-  验证（jsdom 端到端，全部通过）：
-    · 语法门（node/vm）PASS；应用正常启动，[判定自检] 18/18 通过
-    · btnStart / btnWrongMode / qNext / qSkip / qReplay / qExit 全部 exists+enabled+无遮挡
-    · 连续5次点击「下一题」无 JS 异常；今日桶正确记账（_written + byUnit 按册|单元）
-    · 错词听写入口可点击；运行时控制台致命错误 = 0
-  明确不动：今日改错A方案、日周月分化、时区闭环、v21.1 恒等式 —— 全部保留，零改动。
-
-【二之十五、v22 新增（2026-09-01 · 今日错误事件计数 + 月清0口径确认）】
-  依据：用户定稿口径——
-    ① 今日错误 = 今日错误总数，有一个算一个，跳过算错误
-    ② 今日改错 = 今日改正确数（v20.8 A方案，本轮零改动保留）
-    ③ 清0规则：日次日清0 / 周次周清0 / 月=全册是否改完（全部改完次月清0；未改完跨月累积；全部改完次日清0）
-  改动（与今日改错 todayFixCount 完全对称，共 7 处 + HTML 1 行）：
-  1. 新增独立事件计数器：todayWrongDate(所属北京自然日) + todayWrongCount(当日错误事件数)
-     —— 答错 +1、跳过 +1，有一个算一个；改对路径不加（今日改错独立计数）
-  2. rollTodayWrongIfNeeded()：跨日(todayWrongDate≠今日)自动归0（每日0点语义），与 rollTodayFix 对称
-  3. 唯一写入点：checkAnswer 的「答错」与「跳过」两分支（真实作答事件）
-  4. 持久化：独立 key「vocab_today_wrong」{d,c}，saveState 写、loadState 恢复（跨日归0）；
-     不参与云端 LWW 合并，杜绝 syncPull 污染（与 vocab_today_fix 完全对称）
-  5. 读取(updatePeriodFix)：改错统计新增「今日错误」卡片(pTodayWrong)，与「今日改错」并列
-  6. 导出 JSON：存档对象新增 todayWrongDate/todayWrongCount 字段（完整可迁移）
-  不变量（均成立，verify.js 断言全绿）：
-   · 答错 +1、跳过 +1、改对 +0 → todayWrong = 今日真实错误事件数，有一个算一个
-   · 今日无真实作答 → todayWrongCount = 0（同步/导入/回填不触碰，绝不虚增）
-   · 次日0点 → todayWrongCount 归0（自然日切分，与今日改错同源）
-   · 今日错误 ⊥ 今日改错：二者独立计数、成对对称、互不干扰
-   · 月清0 = 全册 wrongBook 是否全部改完（不分册），与当前所选册无关 —— advanceFixClear 原已正确，零改动
-  明确不动：今日改错A方案(todayFixCount)、日周月分化、时区闭环(+08)、v21.1/v21.2 全部修复 —— 保留。
-
-【二之十六、v23 新增（2026-09-01 · 改错统计口径重构 + createdAt 根治 updated 污染）】
-  依据：用户定稿口径（B方案，日/周/月标签切换规则）——时间标准=北京时间，日=自然日/周=自然周(周一)/月=自然月；
-        ★ 本轮核心：上一版(v22)"一次性改对交付"把 107 条未改词全标 fixed=true，与事实矛盾，
-        用户明确"并没有改完" → 彻底还原备份真实状态（48 已改 + 107 未改），一条不造假。
-  改错统计·切到「日/周/月」标签时的卡片口径：
-    ┌──────────────┬──────────────────────┬──────────┐
-    │ 卡片         │ 定义                 │ 随标签切 │
-    ├──────────────┼──────────────────────┼──────────┤
-    │ 错误         │ 当月错误总量         │ 锁月     │
-    │ 已改正       │ 当日(周期)已改正总量 │ 切(日/周/月)│
-    │ 未改正       │ 当日(周期)未改正总量 │ 切       │
-    │ 改正率       │ 当日(周期)改正率     │ 切       │
-    │ 今日改错     │ 当日改对总量         │ 锁今日   │
-    │ 今日错误     │ 当日错误总量         │ 锁今日   │
-    │ 月错误量     │ 当月错误总量         │ 锁月(=错误)│
-    │ 跨月继续改错 │ 上月未改完量         │ 锁上月   │
-    └──────────────┴──────────────────────┴──────────┘
-  关键决策（B方案）：
-    · 未改正 = 当日(周期)错误 − 当日(周期)已改正（纯同周期口径，不跨周期相减；周/月标签下 ≤ 月未改正）
-    · 错误 ≡ 月错误量（同义）→ 保留两张卡片维持视觉稳定，label 明示"月"
-  根因修复（第一轮排查"信息混乱"的根本原因）：
-    · updated 被 syncPull/导入 批量刷新 → 丧失"出错时间"语义 → 日/周/月计数随同步日乱跳
-    · ★ 新增独立字段 createdAt = 首次出错时间（永不变），改错统计时段过滤全部改用 createdAt
-    · 写入点：addWrong(新错词)/mergeOneWord(取早)/_wbEntryDefaults(兜底)/applySnapshotText(导入补全)/
-              loadState(backfillCreatedAt 回填)/syncPull(云端合并取早)/syncPush(上传 created_at)
-    · 读取点：getWrongInScopeAll/aggregateWrongByBook/hasCrossMonthWrong/getLastMonthUnfixedCount/renderFixBreakdown
-    · 向后兼容：createdAtOf() 缺失 → 回落 updated → 再回落 0（极早期条目，落在所有窗口内）
-  改动（共 9 处 + HTML 1 行 + 交付数据还原）：
-    1. updatePeriodFix：错误/月错误量=锁月（getFixSince("month")）、已改正/未改正/改正率=随周期（getFixSince(mode)）
-       —— 顶部直接内联计算，明确分离"锁月"与"切周期"两套口径
-    2. hasCrossMonthWrong → 「上月未改完量」（严格 < 本月1号0点，createdAt 判定）
-    3. 新增 getLastMonthUnfixedCount()：「跨月继续改错」卡片显示"上月未改完 N"
-    4. getWrongInScopeAll / aggregateWrongByBook：updated → createdAtOf()
-    5. addWrong：新增 createdAt=now（首次出错，永不变）
-    6. mergeOneWord：createdAt 取早者（OR 合并保留最早出错时间）
-    7. _wbEntryDefaults：补齐 createdAt 默认
-    8. applySnapshotText / syncPull / syncPush：导入补全 + 上传 created_at 字段
-    9. loadState：backfillCreatedAt（历史条目 createdAt 缺失回落 updated，整批簇对齐北京0点）
-    10. HTML：跨月卡片 label "跨月状态" → "跨月继续改错"
-  清0规则（确认无需改动，advanceFixClear 原已正确）：
-    · 日次日清0 / 周次周清0 / 月=全册是否改完（全部改完次月清0；未改完跨月累积）
-  不变量（均成立，verify.js + replay 断言全绿）：
-    · 全册未改完(107≠0) → allFixedDate="" → 跨月继续累积（符合规则）
-    · createdAt 永不被同步链路刷新；updated 再怎么变，改错统计窗口不再乱跳
-    · 今日错误 ⊥ 今日改错（独立事件计数，跨日归0，与 createdAt/updated 彻底解耦）
-    · 恒等式自检：顶部(createdAt 窗口) ≥ 明细之和（±1 容差·未分册兜底），真正交叉校验而非恒等自比
-  明确不动：今日改错A方案(todayFixCount)、今日错误事件计数、日周月分化结构、时区闭环(+08) —— 保留。
-
-【二之十一、v20.8 新增（2026-08-30 · 本轮，仅动改错统计·今日改错）】
-  依据：用户字面口径——「今日改错 = 今天改了错的数量，有一个算一个；没改=0；第二天没改依旧=0；改了有一个算一个」。
-        截图反证：听写=0 却今日=2 → 旧方案(fixedAt/updated 时间窗口)会虚增，须彻底解耦时间戳。
-  改动（仅 3 处 + 探针文字，其余一字未动）：
-  1. 新增纯事件计数器：g.todayFixDate(所属北京自然日) + g.todayFixCount(当日改对事件数)，
-     配合 rollTodayFixIfNeeded()：跨日(todayFixDate≠今日)自动归0（每日0点语义）。
-  2. 唯一写入点：markDone 在「未改→已改(!_wasFixed)」那一刻 todayFixCount++。
-     触发条件 = 用户真实改对事件，有一个算一个；markDone 仅由真实答题路径调用(11578)。
-  3. 读取(updatePeriodFix)：今日改错 = g.todayFixCount（彻底废弃 fixedAt/updated 时间窗口统计）。
-  4. 持久化：saveState 写独立 key「vocab_today_fix」{d,c}；loadState 恢复（跨日归0）；
-     此 key 不参与云端 LWW 合并，杜绝 syncPull 污染。
-  不变量（均成立）：
-   · 今日没改 → todayFixCount = 0（无论同步/导入刷多少 updated，计数器不动）
-   · 改对1个 → +1（有一个算一个）；改3个 → 3
-   · 次日0点 → 归0；次日没改 → 0
-   · 同步/导入/回填 不经过 markDone 的真实改对分支 → 绝不虚增
-  探针：已在「⚙️ 设置 → 今日改正诊断」（默认隐藏、用时调取），本轮更新为事件计数口径，
-       区分「计数器(权威)」与「今日已改正清单(参考)」，只读不写。
-  明确不动：改错统计其他字段(错误/已改正/未改正/改正率/月错误量/分册/遍数)、
-           学习统计、听写统计 —— 全部保持日/周/月自然窗口累计，零改动。
-
-【二之十、v20 新增（2026-08-29）】
-  三项改动（用户定稿，不再变更）：
-  1. 改错统计改为「顶部总量(不分册) + 分册明细」两层（对齐听写统计结构）：
-       · 顶部总量 = 全册所有错词（与册无关、固定），含 错误/已改正/未改正/改正率/月错误量
-       · 分册明细 = aggregateWrongByBook（按册拆分，错误/已改正/未改正/改正率）
-       · 决策(Q1-a)：顶部 = 全册所有错词，切换册时顶部不变、仅明细高亮当前册
-  2. 改错跨月设计（任务2）：
-       · 时间窗口 = 「清零起点 getFixSince ~ 此刻」，不按月硬切
-       · 累计起点 = max(全部改正清零次日, 周期自然起点)
-       · 未全部改正 → 从周期起点持续累积（跨月继续、不清零）
-       · 全部改正 + 次日0点 → advanceFixClear 清空整个 wrongBook（全册，Q2-a）
-       · 跨月红字：存在 updated < 本月1号的未改正错词 → 「跨N月·继续改错」
-       · getWrongInScope 改为全册（去掉 g.book 过滤），改用 getFixSince
-  3. 听写统计·分册明细下钻到单元：
-       · aggregateByBook 的 key 由 book → "册 / 单元"（unit 为空兜底「未分单元」）
-       · 渲染为「册汇总行 + 单元明细行」，当前所选册 ★ 置顶、当前所选单元 ✅ 高亮
-       · 历史数据(unit="")归到「未分单元」行，不丢数据
-  守恒：听写恒等式「顶部总量(不分册) ≡ Σ分册明细」改为「顶部 ≥ Σ明细」(因明细按册、顶部全册)，
-        renderFixBreakdown / renderChart 均加运行时 console 断言自检；
-        探针隔离(isDiagnosticBook)、日横·周月竖、漂移自检均保持不变。
-
-【二之八、v15 新增（今日总量 = 今日全册之和，不分册）】
-  变更：今日总量 / 今日正确率 由「所选册」改为「今日·全册之和（不分册）」，
-        与「听写统计·日 顶部总量」完全同源(= getAllBooksStats)，不再分册。
-  改动点：renderStats 今日统计取值 getScopedStats(g.book,g.unit) → getAllBooksStats（今日桶）。
-  依据：用户定稿口径「今日总量为今日所有听写量，不分册」。
-  守恒：今日正确率(= 今日全册正确率) 与 今日总量 共用同一 td，分子分母同源，语义自洽；
-        _todayWritten 守护 / 今日未听写强制归0 逻辑保持不变。
-
-【二之七、v14 新增（落地交接快照 待办1+2）】
-  1.（待办1）reconcileSession 改为「桶内容 + _todayWritten」双锚点清0：
-     今日桶存在 且 今日未真实作答 → 无条件物理删除今日桶，
-     根治"今日未听写仍显示错误1"（含 syncPull 脏写 / 旧版残留场景）。
-     双锚点：① g.stats[today].byUnit 有内容 ② g._todayWritten===today；
-     仅 ①&&② 同时为真才保留今日桶，其余一律清0。
-  2.（待办2）确认「听写统计总量=不分册」配套：updatePeriodStats / renderChart 已统一用
-     getAllBooksStats（全册之和），aggregateByBook 按册分组——二者对同一 byUnit 求和，
-     数学上「顶部总量 ≡ Σ分册明细」恒成立；并在 renderChart 加运行时 console 断言自检，
-     失配时报警（不阻断渲染），防止未来口径回退。
-  3. 待办1 为待办2 的前提：今日桶清0 干净后，getAllBooksStats 聚合才不被残留污染，
-     恒等式自检方可信赖（执行顺序：先 T1 后 T2，已满足）。
-
-【二之六、v13 新增（三大问题根治，对齐用户定稿口径）】
-  根因：① updatePeriodFix 用 Object.values(g.wrongBook) 全量无册过滤 → 错词本(当前册=47)≠改错统计(全册=130)；
-        ② 兜底 if(err===0&&wc.length>0){err=wc.length} 把三模式窗口统计强制成全量 → 日=周=月；
-        ③ renderChart day 分支保留多 item 横柱骨架 → "第二个柱状图"反复横跳去不掉。
-  整改：
-  1. 新增 getWrongInScope(mode) 单一事实源 = 当前册(g.book) ∩ 时间窗口 ∩ 排除连通测试探针；
-     错词本 ≡ 改错统计（同一作用域），47=47，不再 47 vs 130。
-  2. updatePeriodFix 改用 getWrongInScope；删除兜底行；日/周/月窗口真正分化（日≠周≠月）。
-     窗口 = getRangeStartTs：日=今日0点 / 周=本周一0点 / 月=本月1号0点（均北京时间）。
-  3. renderChart day 分支结构性去柱：仅渲染「总计一条横条 + 时间/正确/错误/总计 4列表格」；
-     week/month 保留竖向柱状图（chart-day）。从结构上杜绝"第二个柱状图"再现。
-  4. 用户定稿口径（锁定，不再变更）：
-     错词本 = 当前册·未改正错词
-     改错统计·日 = 今日(新增/改正)错词
-     改错统计·周 = 本周(周一~今日)
-     改错统计·月 = 本月(1号~今日)
-     约束：① 日 ≠ 周 ≠ 月  ② 错词本 ≡ 改错统计（同一作用域 = 当前册）
-
-【二之一、v2 新增（多设备同步防丢数据）】
-  1. 单调递增 dataVersion + updatedAt：每次 saveState 版本+1，随 localStorage / 导出 JSON 持久化
-  2. 文件导入改为「词条级合并」：错词本(count取大/fixed取OR/updated取晚)、
-     stats(按日期×单元取大)、masteredWords(取并集)——双方数据都保留，绝不直接覆盖
-  3. 冲突检测：导入/云端同步比对 dataVersion，传入版本较旧则自动合并、不回退本地
-  4. 内嵌快照「载入存档快照」仍为覆盖语义（用户主动恢复，需确认），符合预期
-  5. Supabase：上传携带 data_version；下载时云端版本较旧则保留本地数据
-  6. 导入结果 toast 回显「新增 X 词 · 更新 Y 词」及版本关系
-  7. 配套建表迁移见文末【附录：Supabase 迁移】；无 data_version 列时自动退化到时间戳仲裁
-
-【二之二、v3 新增（修复"不能多设备自动同步"）】
-  根因：① 自动同步循环被 getUserId() 守卫，未登录即空转；② 建表 SQL 只 enable RLS 却
-  缺 policy，写入被 42501 静默拦截（连接测试用 select 恰好掩盖）；③ 仅靠 60 秒轮询，无实时推送；
-  ④ 会话恢复失败无重试。修复如下：
-  1. Supabase Realtime：initSupa 连接成功后 setupRealtime() 订阅三表的 INSERT/UPDATE，
-     云端变更即时推送到所有在线设备 → 触发 syncPull（真正的"自动同步"），轮询降为兜底
-  2. RLS 策略：迁移 SQL 补齐三表的 for-all-to-authenticated policy + grant，并新增
-     detectRlsError()：捕获 42501/permission denied 时明确提示"RLS 策略未配置"
-  3. 会话韧性：tryRestoreSession 失败后指数退避自动重试（最多 3 次），避免永久未登录致同步停摆
-  4. 收敛提速：轮询周期 60s→30s，切前台/visibilitychange 节流 30s→15s
-  5. 迁移 SQL 独立为 supabase/migrations.sql（含 RLS policy + Realtime 副本标识与 publication）
-  配套：supabase/migrations.sql（一次性在 SQL Editor 执行即可）
-
-【二之三、v4 新增（统计规则重构，对齐定稿总则）】
-  总则：时间标准 = 北京时间(UTC+8)；日/周/月 = 自然日/自然周/自然月。
-  改动：
-  1. 北京时间统一：todayStr / todayYMD / currentMonthPrefix / currentYM / getRangeDates
-     (周一起点、本月1号) / updatePeriodFix(今日、本月边界) 全部锁定 UTC+8，
-     与 g.stats 日期键同源，消除零点漂移。
-  2. 学习统计：
-     · 核心恒等式（v9 定锚，不再变更）：
-        剩余新词 + 当月听写量 ≡ 册总量(cap)
-        当月听写量 = 册总量 − 剩余新词 = 该册「去重已听写单词数」(heardSet.size)
-        剩余新词   = 册总量 − 已听写（去重，一个单词算一次，含跳过）
-     · 单一口径 = 去重单词数；允许跨月累计；遍周期与月份无关。
-     · 遍数追踪：听完全册(record bookCompletedDate) → 次日0点 advanceBookPass()
-       passCount++、清除该册 masteredWords/wrongBook → 第二遍从总词量重启，显示"第N遍"
-  3. 听写统计：日模式改为「横向柱状图」(水平条形，长度拉满、宽窄美观)，
-     周/月保持原竖向柱状图；分册明细新增"总量"列(=对应时间分册听写总量，次日0点清0)。
-  4. 改错统计（v20）：顶部总量 = 全册所有错词（不分册），含 错误/已改正/未改正/改正率；
-     分册明细 = 按册拆分；全部改正后记录 allFixedDate，次日0点 advanceFixClear() 清空整个 wrongBook（全册）；
-     窗口 = 「清零起点~此刻」不按月硬切，未改完跨月继续并红字标注「跨N月·继续改错」；跳过计入改错。
-  5. 账本自检 verifyLedger 不变量1（v9）：恒等式 剩余 + 当月听写量 === cap，漂移自动修平；
-     monthlyTotals 改为派生缓存，唯一写入源 recomputeMonthTotal() = heardSet.size。
-
-【二之四、v5 新增（连通测试探针与主统计彻底隔离）】
-  问题：截图发现「分册明细」出现"连通测试"(正确2/错误0)，源于云端 syncPull 把
-  🔬连通测试的探针行写回本地 g.stats / g.wrongBook，污染主界面统计。
-  原则：连通测试是「⚙️ 设置 → 连通测试」的诊断工具，其探针数据只用于判断云端连通性，
-  绝不可出现在主界面的分册明细 / 错词本 / 总正确率中。
-  改动（三层防护，任一可独立生效，互为冗余）：
-  1.【源头拦截】syncPull 拉取云端 vocab_progress / wrong_words 时，对每行先判
-     isDiagnosticBook(book) || isDiagnosticBook(word)，命中即跳过，探针永不复写本地账本。
-  2.【渲染过滤】aggregateByBook（分册明细）增加双重过滤：book 级 + key 整体含"连通测试/探针"兜底；
-     renderWrong（错词本）增加 isDiagnosticBook 显式排除。
-  3.【历史清理】新增 purgeDiagnosticProbes()（幂等），init 加载数据后自动执行一次，
-     清除本地已污染的 stats.byUnit / wrongBook 探针条目并自动存档；连通测试数据一键归零。
-  判定函数：isDiagnosticBook(name) = /连通测试|__diag__|^__/.test(name)。
-
-【二之五、v6 / v7 / v8 / v9 口径收敛（当前生效版本）】
-  · v6：剩余新词 / 当月听写量改用「去重单词数」单一口径；setMT 写入封顶 = 册总量；
-    当日统计(今日总量/正确率/本次正确错误)今日未真实作答时强制归0(显示+存储双清)；
-    getRangeDates 周起点改北京时间星期，monday 显式声明避免抛错。
-  · v7：核心恒等式 剩余新词 + 当月听写量 ≡ 册总量(cap) 编译期强制、漂移自动修平；
-    当月听写量 = 总量 − 剩余新词(已听一个单词算一次，允许跨月)。
-  · v8：清册机制 = 自动。一本书听写完(剩余=0) → 记录 bookCompletedDate →
-    次日0点 advanceBookPass()：passCount++、清除该册 masteredWords/wrongBook、
-    当月听写量(monthlyTotals)归0 → 第二遍从总词量重新累计，遍周期与月份无关。
-    遍数从第1遍就显示：passLabel = "第" + (donePasses+1) + "遍"，红字紧跟「剩余新词」。
-    清0前本地归档（不上云端）：createPassArchive → localStorage vocab_pass_archive。
-  · v9（当前）：口径最终定锚，不再横跳。
-    ★ 当月听写量 / 剩余新词 统一为「去重单词数」单一口径，恒等式 剩余 + 当月 ≡ cap 恒成立。
-    ★ monthlyTotals 降为派生缓存，唯一写入源 recomputeMonthTotal() = heardSet.size；
-      checkAnswer 不再 setMT+1 累加（根除"次数 vs 去重"打架）。
-    ★ 日统计清0：reconcileSession 物理删除今日桶 + _todayWritten 守护
-      （checkAnswer / syncPull 写入端均以今日真实作答为唯一真值，根治"未清0感"）。
-    ★ 修复历史上 v6(封顶次数)/v7(恒等式)/v8(封顶) 的口径横跳，以本版为准。
-
-【三、已完成的功能清单】（不要重复实现）
-  1. 核心听写：课本/单元选择、词量、开始听写、错词听写、TTS 发音、按住说话语音识别
-  2. 管理功能全部收入「⚙️ 设置」菜单，桌面不再散落按钮：
-     · 重置 · 重置进度 · 清除 · 导入 · 导出
-     · 自定义单词表 · 同步设置 · 备份管理
-  3. 设置子菜单：默认隐藏，点击「⚙️ 设置」才弹出；进子页自动收起，返回时恢复
-  4. 三个功能键（按住说话 / 开始听写 / 错词听写）横排并列（flex 布局，窄屏自动折行）
-  5. 已彻底移除开发调试「🔧 工作台」（devPanel / devTrigger / __EMBED__ 已全部清除）
-  6. 统计口径已对齐：
-     · 「本次正确/错误」与「今日总量/今日正确率」以当天日期为共同基准
-     · 跨午夜长会话自动归入新一天并从 0 重计（reconcileSession + _sessionDate）
-     · 加载/导入旧数据时，非今天的旧会话计数清零
-  7. 备份与回滚：
-     · 存档快照（vocab_pinned_snapshot）永久钉在时间线顶部，永不淘汰
-     · 自动备份保留份数 30（自然天分组，多时间点可回滚）
-     · 「备份管理」顶部提供「📥 载入存档快照」一键还原（快照内嵌为 EMBEDDED_SNAPSHOT）
-     · 文件导入 / 内嵌载入统一走 applySnapshotText（单一来源）
-
-【四、关键架构/锚点】（改动前务必先看这里）
-  · g              ：全局状态对象（correct/wrong/_sessionDate/stats/autoBackups/version…）
-  · checkAnswer    ：答题判定，顶部先调 reconcileSession() 再计数（顺序不可颠倒）
-  · buildQueue     ：组建听写队列，开头会清零会话计数——correct/wrong 还原必须放在它之后
-  · reconcileSession：会话计数与今日桶的对齐核心，跨天自动清零
-  · saveState / exportJSON / importJSON / applySnapshotText ：持久化与导入链路
-  · initSupa / setupRealtime / onRemoteChange ：Supabase 连接 + Realtime 实时同步
-  · syncPush / syncPull / detectRlsError / tryRestoreSessionWithRetry ：云端同步与韧性重试
-  · getScopedStats / computeBookStats / getScopedStats / computeBookStats / recomputeMonthTotal ：统计聚合（v9 恒等式口径：
-                                                                             当月听写量 = heardSet.size = cap − remain，允许跨月，遍周期与月份无关）
-    剩余新词 = cap − heardSet.size（恒等式：剩余 + 当月 ≡ cap），跨月红字 crossN）
-  · advanceBookPass / advanceFixClear ：每日0点推进遍数 / 改错清0（幂等，renderStats 首部调用）
-  · renderStats / renderChart / updatePeriodFix ：统计渲染 / 日横·周月竖柱状图 / 改错统计(不分册)
-  · verifyLedger / runLedgerCheck ：账本自检，不变量1 = 恒等式 剩余+当月≡cap，漂移自动修平
-  · todayStr / todayYMD / currentYM ：北京时间(UTC+8)日期键，与 g.stats 写入键同源
-  · EMBEDDED_SNAPSHOT ：内嵌于脚本中的存档快照常量（对应 vocab_snapshot.json 内容）
-
-【五、统计口径速查】（v9，总则：北京时间 · 自然日/周/月 · 次日0点清0 · 恒等式定锚）
-  · 本次正确/错误 = g.correct / g.wrong          （本轮会话瞬时，次日0点清0，reconcileSession 保证）
-  · 本组总数     = 本次词量 = 当前队列长度
-  · 今日总量     = 今日·所选册 Σ(c+w)            （次日0点归0）
-  · 今日正确率   = round(100 * c / (c+w))        （所选册，次日0点归0）
-  · 总正确率     = 所选册累计 c / (c+w)
-  · 当月听写量   = 册总量 − 剩余新词 = 该册去重已听写单词数(heardSet.size)，允许跨月、不封顶
-  · 剩余新词     = 册总量 − 已听写（去重，一个单词算一次，含跳过），∈[0,cap]
-  · 恒等式       = 剩余新词 + 当月听写量 ≡ 册总量(cap)（v9 定锚，恒成立，见 verifyLedger）
-  · 遍数         = 听完一册计一遍；次日0点 advanceBookPass 进下一遍，标注"第N遍"
-  · 跨月         = 上月未听完+本月继续 → 红字"跨N月 · 继续听写"，听完次日清0
-  · 日柱状图     = 横向(水平条形)；周/月 = 竖向(保持)
-  · 分册明细     = 对应时间分册听写总量(含"总量"列)，次日0点清0
-  · 改错统计     = 按日/周/月总量，不分册；全部改正后次日0点清0，跳过计入改错
-
-【六、已知遗留 / 注意事项】
-  · 答题队列夹具（回归测试）仅 1 词时会导致多次 checkAnswer 提前返回——属测试环境问题，非产品 bug
-  · 云端同步（Supabase）需自行配置 URL + Anon Key
-  · 快照的「剩余新词/本组总数」随实际 wordsData 重算，导入后可能与原截图略有差异
-
-【七、新对话接续规范】
-  1. 上传本文件即可，无需附带额外说明
-  2. 若需指定起点，可附一句：「请先通读本注释头掌握现状，不要重复已实现部分」
-  3. 每次改动完成后：更新本注释头的【二、版本】与对应清单项，并生成新快照固化状态
-  4. 涉及多设备同步的改动：务必同步 supabase/migrations.sql，并在 SQL Editor 重新执行
-================================================================================
--->
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN"><head>
 <meta charset="UTF-8">
 <script>
 /* v2.18 一次性迁移：把旧 file:// 源 localStorage 快照导入新 https 源（仅 APK 内生效） */
@@ -939,20 +379,20 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
 <body>
 <div class="header">
   <h1>外研版高中英语单词背诵</h1>
-  <div class="info" id="hdrInfo">加载中…</div>
+  <div class="info" id="hdrInfo">必修一·全部 · 册总量 409 · 已掌握 0 · 剩余 409 · 当月听写 0</div>
 </div>
 <div class="container" id="mainContainer">
   <div class="left">
     <div class="card">
       <h3>学习设置</h3>
       <label>课本</label>
-      <select id="selBook"></select>
+      <select id="selBook"><option value="必修一">必修一</option><option value="必修二">必修二</option><option value="必修三">必修三</option><option value="选必一">选必一</option><option value="选必二">选必二</option><option value="选必三">选必三</option><option value="选必四">选必四</option><option value="高考3500词(乱序)">高考3500词(乱序)</option><option value="高考3500词(正序)">高考3500词(正序)</option></select>
       <label>单元</label>
-      <select id="selUnit"><option value="__all">全部</option></select>
+      <select id="selUnit"><option value="__all">全部</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select>
       <label>本次词量</label>
       <div id="wordCountBox" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
         <button class="btn btn-blue" data-n="10">10</button>
-        <button class="btn btn-blue" data-n="20">20</button>
+        <button class="btn btn-blue active" data-n="20">20</button>
         <button class="btn btn-blue" data-n="30">30</button>
         <button class="btn btn-blue" data-n="50">50</button>
         <input id="customN" type="number" min="1" placeholder="自定" style="width:80px;padding:6px">
@@ -1005,8 +445,8 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
     <div class="card">
       <h3>学习统计</h3>
       <div class="stats">
-        <div class="stat"><div class="v" id="sRemain">0</div><div class="l">剩余新词 <span id="passLabel" class="pass-badge"></span></div></div>
-        <div class="stat"><div class="v" id="sTotal">0</div><div class="l">本组总数</div></div>
+        <div class="stat"><div class="v" id="sRemain">409</div><div class="l">剩余新词 <span id="passLabel" class="pass-badge" style="color: rgb(239, 68, 68); font-weight: 700; margin-left: 4px;">第1遍</span></div></div>
+        <div class="stat"><div class="v" id="sTotal">20</div><div class="l">本组总数</div></div>
         <div class="stat"><div class="v" id="sCorrect">0</div><div class="l">本次正确</div></div>
         <div class="stat"><div class="v" id="sWrong">0</div><div class="l">本次错误</div></div>
         <div class="stat"><div class="v" id="sTodayTotal">0</div><div class="l">今日总量</div></div>
@@ -1014,20 +454,20 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
         <div class="stat"><div class="v" id="sTotalRate">0%</div><div class="l">总正确率</div></div>
         <div class="stat"><div class="v" id="sMonthTotal" style="color:#3b82f6">0</div><div class="l">📅 当月听写量</div></div>
       </div>
-      <div id="crossMonthTag" style="margin-top:6px;font-size:13px;text-align:center;"></div>
-      <div id="ledgerStatus" style="margin-top:10px;font-size:13px;text-align:center;"></div>
+      <div id="crossMonthTag" style="margin-top: 6px; font-size: 13px; text-align: center; display: none;"></div>
+      <div id="ledgerStatus" style="margin-top:10px;font-size:13px;text-align:center;"><span style="color:#10b981">🧮 账本正常 · 统计口径唯一 · 死账恒等</span></div>
     </div>
     <div class="card" style="margin-top:14px">
       <h3>听写统计 <span class="tabs"><span class="tab active" data-r="day">日</span><span class="tab" data-r="week">周</span><span class="tab" data-r="month">月</span></span></h3>
       <div class="stats" style="grid-template-columns:repeat(2,1fr);margin-top:8px">
-        <div class="stat"><div class="v" id="pCorrect" style="color:#10b981">0</div><div class="l">正确</div></div>
+        <div class="stat"><div class="v" id="pCorrect" style="color:#10b981" title="全部册·当日">0</div><div class="l">正确</div></div>
         <div class="stat"><div class="v" id="pWrong" style="color:#ef4444">0</div><div class="l">错误</div></div>
       </div>
       <div style="display:flex;height:14px;border-radius:7px;overflow:hidden;margin-top:10px;background:#f1f5f9">
         <div id="pCorrectBar" style="width:0%;height:100%;background:linear-gradient(90deg,#34d399,#10b981);transition:width .3s"></div>
         <div id="pWrongBar" style="width:0%;height:100%;background:linear-gradient(90deg,#f87171,#ef4444);transition:width .3s"></div>
       </div>
-      <div class="chart" id="chart" style="margin-top:10px"></div>
+      <div class="chart" id="chart" style="margin-top:10px"><div class="bd-table" style="margin-top:2px"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="color:#64748b;text-align:left"><th style="padding:6px 8px">时间</th><th style="padding:6px 8px">正确</th><th style="padding:6px 8px">错误</th><th style="padding:6px 8px;text-align:right">总计</th></tr></thead><tbody><tr style="border-top:1px solid #eef2f7"><td style="padding:6px 8px">2026-09-26</td><td class="bd-c" style="padding:6px 8px;color:#3b82f6">0</td><td class="bd-w" style="padding:6px 8px;color:#ef4444">0</td><td style="padding:6px 8px;text-align:right;font-weight:600;color:#1e3a5f">0</td></tr></tbody></table></div><div class="breakdown"><h4>分册明细（册 / 单元） · 当日</h4><div class="bd-empty">本当日无分册听写数据</div></div></div>
     </div>
     <div class="card" style="margin-top:14px">
       <h3>改错统计 <span class="tabs"><span class="tab active" data-r="day">日</span><span class="tab" data-r="week">周</span><span class="tab" data-r="month">月</span></span></h3>
@@ -1039,20 +479,20 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
         <div class="stat"><div class="v" id="pTodayWrong" style="color:#ef4444">0</div><div class="l">今日错误</div></div>
         <div class="stat"><div class="v" id="pFixRate">0%</div><div class="l">改正率</div></div>
         <div class="stat"><div class="v" id="pMonthError" style="color:#ef4444">0</div><div class="l">📅 月错误量</div></div>
-        <div class="stat"><div class="v" id="pCrossMonth" style="color:#ef4444;font-size:13px;min-height:20px">&nbsp;</div><div class="l">跨月继续改错</div></div>
+        <div class="stat"><div class="v" id="pCrossMonth" style="color: rgb(148, 163, 184); font-size: 13px; min-height: 20px;">本月无跨月</div><div class="l">跨月继续改错</div></div>
       </div>
-      <div id="fixBreakdown" style="margin-top:8px"></div>
+      <div id="fixBreakdown" style="margin-top:8px"><h4>改错·分册明细 · 当日</h4><div class="bd-empty">本当日无改错记录</div></div>
     </div>
     <div class="card wrong-box" id="wrongBox" style="margin-top:14px">
       <div class="wb-head" id="wrongHead">
         <h3>错词本（<span id="wrongCnt">0</span>）</h3>
         <div class="wb-actions">
-          <span class="wb-count" id="wrongFsCount"></span>
+          <span class="wb-count" id="wrongFsCount">0 未改正 / 0 总</span>
           <button class="wb-fs-btn" id="wrongFsBtn" title="全屏查看未改正错词" type="button">⛶ 全屏</button>
           <span class="wb-toggle">▾</span>
         </div>
       </div>
-      <div class="wrong-list" id="wrongList"></div>
+      <div class="wrong-list" id="wrongList"><div style="padding:12px;color:#94a3b8;font-size:13px;text-align:center">当前范围无错词 🎉</div></div>
     </div>
   </div>
 </div>
@@ -1064,7 +504,7 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
       <button class="wb-fs-close" id="wrongFsClose" type="button" aria-label="关闭">✕</button>
     </div>
     <div class="wb-fs-hint">仅显示「未改正」错词，按错误遍数由高到低排序 · 点击遮罩 / ✕ / Esc 关闭</div>
-    <div class="wrong-list" id="wrongFsList" style="max-height:none"></div>
+    <div class="wrong-list" id="wrongFsList" style="max-height:none"><div style="padding:16px;color:#94a3b8;font-size:14px;text-align:center">当前范围无未改正错词 🎉</div></div>
   </div>
 </div>
 
@@ -1091,9 +531,7 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
       <!-- 导入区域 -->
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
         <button class="btn btn-blue" id="btnImportDoc">📄 导入文档</button>
-        <select id="customBookSel" style="width:auto;min-width:160px;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fafafa">
-          <option value="">-- 选择自定义单词表 --</option>
-        </select>
+        <select id="customBookSel" style="width:auto;min-width:160px;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fafafa"><option value="">-- 选择自定义单词表 --</option></select>
         <button class="btn btn-green" id="btnUseCustom">▶ 使用选中表</button>
         <button class="btn btn-red" id="btnDelCustom">🗑️ 删除选中表</button>
       </div>
@@ -1109,7 +547,7 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
         <button class="btn btn-purple" id="btnImportImage">🖼️ 图片识别导入</button>
         <span id="ocrStatus" style="font-size:12px;color:#64748b;min-width:120px"></span>
       </div>
-      <div id="customList" style="max-height:120px;overflow:auto;border:1px solid #f1f5f9;border-radius:8px;padding:4px;margin-bottom:10px"></div>
+      <div id="customList" style="max-height:120px;overflow:auto;border:1px solid #f1f5f9;border-radius:8px;padding:4px;margin-bottom:10px"><div style="padding:8px;color:#94a3b8;font-size:12px">暂无自定义单词表，导入文档或手动添加吧 ↓</div></div>
       <input type="file" id="customFileInput" accept=".docx,.xlsx,.xls,.csv,.json,.pdf,.txt,.png,.jpg,.jpeg,.bmp,.webp" class="hidden">
       <input type="file" id="customImageInput" accept="image/png,image/jpeg,image/bmp,image/webp" class="hidden">
 
@@ -1137,8 +575,10 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
   <div class="sync-inline" id="syncInline">
         <div class="sync-toggle" id="toggleSync">🔗 同步设置 [展开]</div>
         <div class="sync-panel hidden" id="syncPanel">
-          <div class="row"><label>Supabase URL</label><input type="text" id="supaUrl" placeholder="https://xxxx.supabase.co 或自定义域名" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+          <div class="row"><label>Supabase URL</label><input type="text" id="supaUrl" placeholder="https://xxxx.supabase.co 或自定义域名" autocapitalize="off" autocorrect="off"></div>
           <div class="row"><label>Supabase Anon Key</label><input type="password" id="supaKey" placeholder="eyJhbGci..."></div>
+          <div class="row"><label>备用线路(反代)</label><input type="text" id="supaProxy" placeholder="可选。直连失败时自动切换，如 https://sb.你的域名" autocapitalize="off" autocorrect="off"></div>
+          <div class="row"><label></label><span style="font-size:11px;color:#64748b;line-height:1.5">手机网络直连 Supabase 被屏蔽时的自动兜底通道。部署方法点「📄 反代部署」。</span></div>
           <div class="row" style="display:flex;gap:6px;flex-wrap:wrap">
             <button class="btn btn-blue" id="btnTest">连接测试</button>
             <button class="btn btn-green" id="btnSave">保存配置</button>
@@ -1146,23 +586,23 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
             <button class="btn btn-blue" id="btnPull">立即下载</button>
             <button class="btn btn-orange" id="btnDiag" style="background:#f59e0b;color:#fff">🔍 诊断登录</button>
             <button class="btn btn-purple" id="btnConnTest" style="background:#7c3aed;color:#fff">🔬 连通测试(写云端)</button>
-            <button class="btn btn-green" id="btnSelfDiag" style="background:#059669;color:#fff">🩺 一键自检</button>
+            <button class="btn btn-blue" id="btnProxyCode" style="background:#0ea5e9;color:#fff">📄 反代部署</button>
           </div>
           <div id="connTestResult" style="display:none;margin-top:10px;padding:10px 12px;background:#0f172a;color:#e2e8f0;border-radius:8px;font-family:monospace,Consolas;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all"></div>
 
       <!-- 同步后端选择器：Supabase / GitHub / 双写并存（并存且不冲突的核心开关） -->
       <div class="backend-sel" style="margin:10px 0;padding:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px">
         <div style="font-size:13px;font-weight:600;color:#1e3a5f;margin-bottom:6px">☁️ 同步后端（可并存）</div>
-        <label class="be-opt" data-be="supabase" style="display:flex;align-items:center;gap:6px;font-size:13px;margin:4px 0;cursor:pointer">
+        <label class="be-opt" data-be="supabase" style="display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 4px 0px; cursor: pointer; font-weight: 700; color: rgb(30, 58, 95);">
           <input type="radio" name="syncBackend" value="supabase"> Supabase（实时双向 · 推荐主力）
         </label>
-        <label class="be-opt" data-be="github" style="display:flex;align-items:center;gap:6px;font-size:13px;margin:4px 0;cursor:pointer">
+        <label class="be-opt" data-be="github" style="display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 4px 0px; cursor: pointer; font-weight: 400; color: rgb(71, 85, 105);">
           <input type="radio" name="syncBackend" value="github"> GitHub（纯免费归档 · 无需额外服务）
         </label>
-        <label class="be-opt" data-be="dual" style="display:flex;align-items:center;gap:6px;font-size:13px;margin:4px 0;cursor:pointer">
+        <label class="be-opt" data-be="dual" style="display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 4px 0px; cursor: pointer; font-weight: 400; color: rgb(71, 85, 105);">
           <input type="radio" name="syncBackend" value="dual"> 双写并存（Supabase 实时 + GitHub 归档备份）
         </label>
-        <div id="backendHint" style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.5"></div>
+        <div id="backendHint" style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.5"><b>Supabase（实时双向）</b>：毫秒级多设备同步，需开通 Supabase 项目并配置 URL/Key。<br>约定：仅 Supabase 为实时真相源，GitHub 只做归档写入 —— 这是并存且不冲突的关键。</div>
       </div>
 
       <!-- 自动同步间隔：可配置的上传/下载周期 + 登录后自动上传开关 -->
@@ -1177,23 +617,21 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
           </label>
         </div>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px;cursor:pointer">
-          <input type="checkbox" id="autoUploadOnLogin" checked> 登录后自动上传一次（本地→云端）
+          <input type="checkbox" id="autoUploadOnLogin" checked=""> 登录后自动上传一次（本地→云端）
         </label>
         <div style="font-size:11px;color:#64748b;line-height:1.5;margin-bottom:6px">
           规则：<b>上传 ≥ 5 秒，下载 ≥ 3 秒，且下载 ≤ 上传</b>（先拉后推，避免把陈旧本地覆盖远端）。Realtime 优先，间隔仅作兜底轮询。
         </div>
-        <div id="intervalHint" style="font-size:11px;line-height:1.5;margin-bottom:6px;color:#64748b"></div>
+        <div id="intervalHint" style="font-size: 11px; line-height: 1.5; margin-bottom: 6px; color: rgb(22, 163, 74);">✅ 配置合法</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <button class="btn btn-green" id="btnSaveInterval" style="padding:4px 12px;font-size:12px">保存间隔</button>
+          <button class="btn btn-green" id="btnSaveInterval" style="padding: 4px 12px; font-size: 12px; opacity: 1;">保存间隔</button>
           <button class="btn btn-orange" id="btnResetInterval" style="padding:4px 12px;font-size:12px" title="恢复上传30秒 / 下载15秒">↺ 重置为默认</button>
         </div>
       </div>
 
-      <div id="authUI" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px"></div>
+      <div id="authUI" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><input id="authEmail" type="email" placeholder="邮箱" style="width:140px;padding:5px;border:1px solid #d1d5db;border-radius:5px;font-size:13px"><input id="authPwd" type="password" placeholder="密码(≥6位)" style="width:120px;padding:5px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;margin-left:4px"><button class="btn btn-blue" id="btnRegister" style="padding:4px 10px;font-size:12px;margin-left:4px">注册</button><button class="btn btn-green" id="btnLogin" style="padding:4px 10px;font-size:12px;margin-left:4px">登录</button></div>
 
-          <div class="row" style="font-size:12px;color:#64748b;display:flex;align-items:center" id="syncStatus">
-            <span class="sync-status-dot offline" id="syncDot"></span> 未连接
-          </div>
+          <div class="row" style="font-size:12px;color:#64748b;display:flex;align-items:center" id="syncStatus"><span class="sync-status-dot offline"></span> 未配置，自动上传跳过</div>
 
         </div>
       </div>
@@ -1205,10 +643,10 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
         <button class="btn btn-green" id="btnManualBackup">⚡ 立即备份</button>
         <button class="btn btn-blue" id="btnExportWithBackup">📦 导出(含备份)</button>
-        <span style="font-size:12px;color:#64748b;align-self:center" id="backupLastTs"></span>
+        <span style="font-size:12px;color:#64748b;align-self:center" id="backupLastTs">最近备份：2026-09-17 21:53</span>
       </div>
       <div style="font-size:12px;color:#64748b;margin-bottom:6px">最近自动备份（最多保留10份，导入旧版数据后也会在此显示）：</div>
-      <div id="backupList" style="max-height:220px;overflow:auto;border:1px solid #f1f5f9;border-radius:8px;padding:4px"></div>
+      <div id="backupList" style="max-height:220px;overflow:auto;border:1px solid #f1f5f9;border-radius:8px;padding:4px"><div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid rgb(248, 250, 252); font-size: 13px; flex-wrap: wrap;"><span style="flex: 1 1 0%; min-width: 140px; color: rgb(51, 65, 85);">2026-09-17 21:53  (错词 0 条)</span><button class="btn btn-blue" style="padding: 3px 8px; font-size: 12px; margin: 0px;">恢复</button><button class="btn btn-red" style="padding: 3px 8px; font-size: 12px; margin: 0px;">删除</button></div><div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid rgb(248, 250, 252); font-size: 13px; flex-wrap: wrap;"><span style="flex: 1 1 0%; min-width: 140px; color: rgb(51, 65, 85);">2026-09-17 21:52  (错词 0 条)</span><button class="btn btn-blue" style="padding: 3px 8px; font-size: 12px; margin: 0px;">恢复</button><button class="btn btn-red" style="padding: 3px 8px; font-size: 12px; margin: 0px;">删除</button></div><div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid rgb(248, 250, 252); font-size: 13px; flex-wrap: wrap;"><span style="flex: 1 1 0%; min-width: 140px; color: rgb(51, 65, 85);">2026-09-17 21:51  (错词 0 条)</span><button class="btn btn-blue" style="padding: 3px 8px; font-size: 12px; margin: 0px;">恢复</button><button class="btn btn-red" style="padding: 3px 8px; font-size: 12px; margin: 0px;">删除</button></div></div>
       <div id="backupRestoreMsg" style="font-size:12px;margin-top:6px;min-height:16px"></div>
     </div>
   </div>
@@ -1217,7 +655,7 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
     <span><b>遍数历史</b><span class="pass-history-note">清0前本地归档，不上云端 · 可还原</span></span>
     <span id="passHistoryCount" style="font-size:11px;color:#94a3b8"></span>
   </div>
-  <div id="passHistoryList" class="pass-history-list"></div>
+  <div id="passHistoryList" class="pass-history-list"><div class="pass-history-empty">本册尚未完成过一遍 · 完成后清0前会自动本地归档（不上云）</div></div>
 </div>
 </div>
 <div class="card settings-entry" id="settingsEntryCard">
@@ -1237,7 +675,7 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
 
   <!-- 子页：今日改正诊断（v20.8 · A方案，按需调取，默认隐藏） -->
   <div class="settings-sub" id="sub-todayfix">
-    <div class="settings-sub-head"><button class="settings-sub-back" data-back>‹ 返回</button><span class="settings-sub-title">今日改正诊断</span></div>
+    <div class="settings-sub-head"><button class="settings-sub-back" data-back="">‹ 返回</button><span class="settings-sub-title">今日改正诊断</span></div>
     <div class="settings-sub-desc">只读工具：核对"今日改正"数值是否等于真实今日改正的错词集合。数据来源为「今日改错事件计数器」，不修改任何数据。</div>
     <div id="todayFixProbe" style="font-size:12px;line-height:1.6"></div>
     <div style="margin-top:10px;font-size:11px;color:#64748b">
@@ -1250,48 +688,48 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
 
   <!-- 子页：重置 -->
   <div class="settings-sub" id="sub-reset">
-    <div class="settings-sub-head"><button class="settings-sub-back" data-back>‹ 返回</button><span class="settings-sub-title">重置</span></div>
+    <div class="settings-sub-head"><button class="settings-sub-back" data-back="">‹ 返回</button><span class="settings-sub-title">重置</span></div>
     <div class="settings-sub-desc">回到初始学习位置（保留错词本、统计与已掌握记录）。</div>
     <button class="btn btn-red" id="setBtnReset">重置</button>
   </div>
   <!-- 子页：重置进度 -->
   <div class="settings-sub" id="sub-resetProgress">
-    <div class="settings-sub-head"><button class="settings-sub-back" data-back>‹ 返回</button><span class="settings-sub-title">重置进度</span></div>
+    <div class="settings-sub-head"><button class="settings-sub-back" data-back="">‹ 返回</button><span class="settings-sub-title">重置进度</span></div>
     <div class="settings-sub-desc">清除当前课本/单元的已掌握记录，下次听写从头开始（保留错词本与统计）。</div>
     <button class="btn btn-orange" id="setBtnResetProgress">🔄 重置进度</button>
   </div>
   <!-- 子页：清除数据 -->
   <div class="settings-sub" id="sub-clear">
-    <div class="settings-sub-head"><button class="settings-sub-back" data-back>‹ 返回</button><span class="settings-sub-title">清除数据</span></div>
+    <div class="settings-sub-head"><button class="settings-sub-back" data-back="">‹ 返回</button><span class="settings-sub-title">清除数据</span></div>
     <div class="settings-sub-desc">清空全部本地数据：错词本、已掌握记录、统计与所有备份。<b style="color:#dc2626">此操作不可恢复。</b></div>
     <div class="confirm-clear-box">
       <div style="font-size:13px;margin-bottom:8px;color:#b91c1c">为防止误触，请输入 <b>确认清除</b> 后点击按钮：</div>
       <input id="clearConfirmInput" placeholder="输入：确认清除">
-      <button class="btn btn-red" id="setBtnClear" disabled>清除全部数据</button>
+      <button class="btn btn-red" id="setBtnClear" disabled="">清除全部数据</button>
     </div>
   </div>
   <!-- 子页：导入 -->
   <div class="settings-sub" id="sub-import">
-    <div class="settings-sub-head"><button class="settings-sub-back" data-back>‹ 返回</button><span class="settings-sub-title">导入</span></div>
+    <div class="settings-sub-head"><button class="settings-sub-back" data-back="">‹ 返回</button><span class="settings-sub-title">导入</span></div>
     <div class="settings-sub-desc">从 JSON 备份文件恢复数据（导入=合并，永不覆盖，导入前自动备份）。</div>
     <button class="btn btn-blue" id="setBtnImport">📥 选择 JSON 文件导入</button>
   </div>
   <!-- 子页：导出 -->
   <div class="settings-sub" id="sub-export">
-    <div class="settings-sub-head"><button class="settings-sub-back" data-back>‹ 返回</button><span class="settings-sub-title">导出</span></div>
+    <div class="settings-sub-head"><button class="settings-sub-back" data-back="">‹ 返回</button><span class="settings-sub-title">导出</span></div>
     <div class="settings-sub-desc">将当前数据导出为 JSON 归档文件（含自动备份）。</div>
     <button class="btn btn-blue" id="setBtnExport">📤 导出数据</button>
     <button class="btn btn-blue" id="setBtnExportWithBackup">📦 导出（含备份）</button>
   </div>
   <!-- 子页：自定义单词表（承载原 customPanel） -->
   <div class="settings-sub" id="sub-custom">
-    <div class="settings-sub-head"><button class="settings-sub-back" data-back>‹ 返回</button><span class="settings-sub-title">自定义单词表</span></div>
+    <div class="settings-sub-head"><button class="settings-sub-back" data-back="">‹ 返回</button><span class="settings-sub-title">自定义单词表</span></div>
     <div class="settings-sub-desc">支持 .docx/.xlsx/.csv/.json/.pdf/.txt 免格式转换直接导入；图片自动 OCR 识词后导入。</div>
     <div id="customSubHost"></div>
   </div>
   <!-- 子页：同步设置（承载原 syncPanel） -->
   <div class="settings-sub" id="sub-sync">
-    <div class="settings-sub-head"><button class="settings-sub-back" data-back>‹ 返回</button><span class="settings-sub-title">同步设置</span></div>
+    <div class="settings-sub-head"><button class="settings-sub-back" data-back="">‹ 返回</button><span class="settings-sub-title">同步设置</span></div>
     <div class="settings-sub-desc">配置 Supabase 云端多端同步（上传/下载/诊断）。</div>
     <div id="syncSubHost"></div>
     <!-- GitHub 一键同步（提交数据 → 触发 Actions 自动构建部署） -->
@@ -1303,10 +741,10 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
         <b>归档方式：</b>「直接推送」= 本机 PAT 直连 GitHub；「<b>通过 Actions</b>」= 由 GitHub Actions 服务端定时提交（推荐，省 PAT 配额、防 commit 风暴，需先在仓库开启 <code>.github/workflows/archive.yml</code>）。<br>
         Token 使用 GitHub <b>Fine-grained PAT</b>（仅勾选本仓库 · Contents 读写权限；选「通过 Actions」时需额外勾选 <b>Repository events（write)</b> 用于触发 workflow），仅存于本机 localStorage，不会被上传。
       </div>
-      <div class="gh-field"><label>仓库（owner/repo）</label><input id="ghRepo" placeholder="例如：zhangsan/vocab-app" /></div>
-      <div class="gh-field"><label>分支</label><input id="ghBranch" placeholder="main" value="main" /></div>
-      <div class="gh-field"><label>Personal Access Token（Fine-grained）</label><input id="ghToken" type="password" placeholder="github_pat_..." autocomplete="off" /></div>
-      <div class="gh-field"><label>数据文件路径（仓库内）</label><input id="ghPath" placeholder="data/vocab.json" value="data/vocab.json" /></div>
+      <div class="gh-field"><label>仓库（owner/repo）</label><input id="ghRepo" placeholder="例如：zhangsan/vocab-app"></div>
+      <div class="gh-field"><label>分支</label><input id="ghBranch" placeholder="main" value="main"></div>
+      <div class="gh-field"><label>Personal Access Token（Fine-grained）</label><input id="ghToken" type="password" placeholder="github_pat_..." autocomplete="off"></div>
+      <div class="gh-field"><label>数据文件路径（仓库内）</label><input id="ghPath" placeholder="data/vocab.json" value="data/vocab.json"></div>
       <div class="gh-field">
         <label>归档方式（提交到仓库的策略）</label>
         <select id="ghArchiveVia">
@@ -1316,7 +754,7 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
       </div>
       <div class="gh-field" id="ghScheduleBox" style="display:none">
         <label>服务端归档周期（Actions cron 表达式，默认每 6 小时一次）</label>
-        <input id="ghCron" placeholder="0 */6 * * *" value="0 */6 * * *" />
+        <input id="ghCron" placeholder="0 */6 * * *" value="0 */6 * * *">
         <small style="color:#64748b">格式：分 时 日 月 周。此为建议值，最终以仓库内 <code>.github/workflows/archive.yml</code> 的 schedule 为准；留空 = 仅手动触发。</small>
       </div>
       <div class="gh-actions">
@@ -1331,7 +769,7 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
   </div>
   <!-- 子页：备份管理（时间线视图 + 一键回滚） -->
   <div class="settings-sub" id="sub-backup">
-    <div class="settings-sub-head"><button class="settings-sub-back" data-back>‹ 返回</button><span class="settings-sub-title">备份管理</span></div>
+    <div class="settings-sub-head"><button class="settings-sub-back" data-back="">‹ 返回</button><span class="settings-sub-title">备份管理</span></div>
     <div class="settings-sub-desc">自动备份以<b>自然天</b>分组的时间线（当天蓝色高亮），支持一键回滚到任意快照。</div>
     <div class="snapshot-quickload">
       <div class="sq-info">
@@ -10764,7 +10202,7 @@ var g = {
   wrongBook: {}, stats: {}, rangeMode: "day",
   // masteredWords: { "book|unit": ["word1","word2",...] } 记录已掌握的单词，下次听写自动跳过
   masteredWords: {},
-  supaUrl: localStorage.getItem("supa_url")||"", supaKey: localStorage.getItem("supa_key")||"", supa: null,
+  supaUrl: localStorage.getItem("supa_url")||"", supaKey: localStorage.getItem("supa_key")||"", supaProxy: localStorage.getItem("supa_proxy")||"", supa: null,
   _t: null, _abort: false, _seq: 0, _syncing: false,
   // 当前会话（本次正确/错误）的时间戳，用于多设备 Last-Write-Wins 合并
   _sessionUpdatedAt: 0,
@@ -10774,7 +10212,7 @@ var g = {
   updatedAt: 0,
   // —— 多后端并存（Supabase / GitHub / dual）——
   // 约定：仅 Supabase 为实时真相源；GitHub 只做归档写入，避免两端对写冲突
-  syncBackend: (function(){ try{return localStorage.getItem("vocab_sync_backend")||"github";}catch(e){return "github";} })(),
+  syncBackend: (function(){ try{return localStorage.getItem("vocab_sync_backend")||"supabase";}catch(e){return "supabase";} })(),
   ghRepo:   (function(){ try{return localStorage.getItem("vocab_gh_repo")||"";}catch(e){return "";} })(),
   ghBranch: (function(){ try{return localStorage.getItem("vocab_gh_branch")||"main";}catch(e){return "main";} })(),
   ghToken:  (function(){ try{return localStorage.getItem("vocab_gh_token")||"";}catch(e){return "";} })(),
@@ -11844,6 +11282,8 @@ function init(){
     var p = document.getElementById("syncPanel");
     p.classList.toggle("hidden");
     document.getElementById("toggleSync").textContent = p.classList.contains("hidden")?"🔗 同步设置 [展开]":"🔗 同步设置 [收起]";
+    var _pi = document.getElementById("supaProxy");
+    if(_pi) _pi.value = g.supaProxy || "";
   };
   // 备份管理面板
   document.getElementById("toggleBackup").onclick = function(){
@@ -11866,48 +11306,8 @@ function init(){
   if(btnDiag) btnDiag.onclick = diagAuth;
   var btnConn = document.getElementById("btnConnTest");
   if(btnConn) btnConn.onclick = diagConnection;
-
-  // 🩺 一键自检（移植自 AI英语）：登录/客户端/三表读取/写入权限/Realtime/GitHub 一次查清
-  var _diagBtn = document.getElementById("btnSelfDiag");
-  if(_diagBtn){
-    _diagBtn.onclick = async function(){
-      var box = document.getElementById("connTestResult");
-      if(box){ box.style.display = "block"; box.textContent = "检测中…"; }
-      var L = [];
-      try{
-        var uid = (typeof getUserId === "function") ? getUserId() : null;
-        L.push("① 登录状态：" + (uid ? ("已登录 uid=" + String(uid).slice(0,8) + "…") : "★未登录★（选 GitHub 同步可不登录）"));
-        if(!g.supa && g.supaUrl && g.supaKey) initSupa();
-        L.push("② Supabase 客户端：" + (g.supa ? "已初始化" : "★未初始化★ 检查 URL / Anon Key"));
-        if(g.supa){
-          var tbs = ["vocab_progress","wrong_words","study_sessions"];
-          for(var i=0;i<tbs.length;i++){
-            var t = tbs[i];
-            try{
-              var r = await syncWithTimeout(g.supa.from(t).select("*").limit(1), 8000);
-              L.push("③ 表 " + t + "：" + (r && r.error ? ("★读取失败★ " + (r.error.code||"") + " " + (r.error.message||"")) : "可读 ✅"));
-            }catch(e){ L.push("③ 表 " + t + "：★异常★ " + ((e&&e.message)||e)); }
-          }
-          if(uid){
-            try{
-              var probe = { user_id:uid, book:"__diag__", unit:"__diag__", word:"__diag__|__diag__|1970-01-01",
-                            correct_count:0, wrong_count:0, last_practiced:"1970-01-01T00:00:00.000Z" };
-              var wr = await syncWithTimeout(g.supa.from("vocab_progress").upsert([probe], {onConflict:"user_id,word"}), 8000);
-              L.push("④ 写入权限(RLS)：" + (wr && wr.error ? ("★被拒绝★ " + (wr.error.code||"") + " " + (wr.error.message||"") + " —— 多半是 RLS policy 没建") : "可写 ✅"));
-              try{ await g.supa.from("vocab_progress").delete().eq("user_id",uid).eq("word",probe.word); }catch(e){}
-            }catch(e){ L.push("④ 写入权限(RLS)：★异常★ " + ((e&&e.message)||e)); }
-          }
-        }
-        L.push("⑤ Realtime：" + (g._rt ? "已订阅 ✅" : "未订阅（不影响轮询兜底）"));
-        L.push("⑥ GitHub 归档路径：" + (g.ghPath || "(未设置)") + ((g.ghPath === "data/vocab.json") ? " ✅" : "（外研版建议 data/vocab.json）"));
-        L.push("⑦ GitHub Token：" + (g.ghToken ? "已配置 ✅" : "★未配置★（选 GitHub 同步需填写）"));
-        L.push("⑧ 同步后端：" + (g.syncBackend || "github"));
-      }catch(e){ L.push("自检异常：" + ((e&&e.message)||e)); }
-      var txt = L.join("\n");
-      if(box) box.textContent = txt;
-      console.log("[一键自检]\n" + txt);
-    };
-  }
+  var btnProxy = document.getElementById("btnProxyCode");
+  if(btnProxy) btnProxy.onclick = showProxyDeployCode;
 
   // ---- 自动同步间隔：加载已保存值 + 保存按钮 ----
   var elPushIv = document.getElementById("autoPushInterval");
@@ -13596,6 +12996,55 @@ function diagAuth(){
   alert("【登录诊断报告】\n\n"+lines.join("\n")+"\n\n提示：出现 ❌ 的项即为原因，按提示处理后点「保存配置」刷新即可。");
 }
 
+// 📄 反代部署：生成与当前 Supabase URL 匹配的 Cloudflare Worker 反代代码 + 部署步骤
+function showProxyDeployCode(){
+  var box = document.getElementById("connTestResult");
+  if(!box) return;
+  box.style.display="block";
+  var target = (g.supaUrl||"https://xxxx.supabase.co").replace(/\/+$/,"");
+  var code = [
+'// Cloudflare Worker：Supabase 备用线路反向代理',
+'// 部署步骤：',
+'// 1. 打开 https://dash.cloudflare.com → Workers & Pages → Create application → Create Worker',
+'// 2. 先 Deploy 一次 → Edit code → 全选删除默认代码，粘贴本代码 → Deploy',
+'// 3.（国内强烈建议）Worker → Settings → Domains & Routes → Add Custom Domain，',
+'//    绑定你自己的域名（如 sb.你的域名.com）。workers.dev 域名在国内常被墙。',
+'// 4. 把绑定的地址（https://sb.xxx）填到本页「备用线路(反代)」输入框 → 点「保存配置」→ 连通测试。',
+'export default {',
+'  async fetch(request) {',
+'    const url = new URL(request.url);',
+'    const target = new URL("' + target + '");',
+'    target.pathname = url.pathname;',
+'    target.search = url.search;',
+'    if (request.method === "OPTIONS") {',
+'      return new Response(null, { status: 204, headers: cors() });',
+'    }',
+'    const upstreamReq = new Request(target, request);',
+'    // WebSocket（Realtime 实时推送）直通：101 响应必须原样返回，不能重新包装',
+'    if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {',
+'      return fetch(upstreamReq);',
+'    }',
+'    const upstream = await fetch(upstreamReq);',
+'    const resp = new Response(upstream.body, upstream);',
+'    const c = cors();',
+'    for (const [k, v] of Object.entries(cors())) resp.headers.set(k, v);',
+'    return resp;',
+'  }',
+'};',
+'function cors() {',
+'  return {',
+'    "Access-Control-Allow-Origin": "*",',
+'    "Access-Control-Allow-Headers": "*",',
+'    "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",',
+'    "Access-Control-Max-Age": "86400"',
+'  };',
+'}'
+  ].join("\n");
+  box.textContent = "【Cloudflare Worker 反代 · 部署代码】（已按当前 Supabase URL：" + target + " 生成）\n\n" + code + "\n\n↑ 长按可全选复制。部署并绑定域名后，把地址填入「备用线路(反代)」→ 保存配置 → 连通测试。";
+  box.scrollTop = 0;
+  try{ if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(code).then(function(){ try{ toast("反代代码已复制到剪贴板"); }catch(e){} }, function(){}); }catch(e){}
+}
+
 // 🔬 连通测试（写云端）：真正向三张表各执行一次 upsert，把原始结果明文显示在页面上，
 // 无需打开开发者工具 Console。用于定位"上传成功但表空"——区分 未登录 / 无数据 / RLS 42501 / 表名404 / 网络。
 async function diagConnection(){
@@ -13622,17 +13071,32 @@ async function diagConnection(){
   push("✅ 已登录  uid="+uid.substring(0,8)+"...");
   push("   本地数据: stats日期 "+dayCount+" 天 / 错词 "+wrongCount+" 条\n");
 
-  // ★ 0.5) 服务器可达性探测：先分清"手机连不上服务器"还是"配置/权限问题"
-  var _t0 = Date.now();
+  // ★ 0.5) 服务器可达性探测（v2.21：直连 + 备用反代双路探测）
   var probeNet = { ok:false, status:0, ms:0, err:"" };
+  var probeProxy = { ok:false, status:0, ms:0, err:"" };
+  var _proxyBase = String(g.supaProxy||"").trim().replace(/\/+$/,"");
+  var _t0 = Date.now();
   try{
     var _pr = await fetch(String(url).replace(/\/+$/,"") + "/auth/v1/health", { headers:{ apikey: key } });
     probeNet.ok = true; probeNet.status = _pr.status;
   }catch(_pe){ probeNet.err = String((_pe && _pe.message) || _pe); }
   probeNet.ms = Date.now() - _t0;
   push(probeNet.ok
-    ? "🌐 服务器可达: HTTP "+probeNet.status+" ("+probeNet.ms+"ms) —— 网络通，若下方仍有失败则与网络无关"
-    : "🌐 服务器不可达 ("+probeNet.ms+"ms): "+(probeNet.err||"未知错误")+" —— 大概率手机网络问题，配置本身没问题");
+    ? "🌐 直连可达: HTTP "+probeNet.status+" ("+probeNet.ms+"ms) —— 网络通，若下方仍有失败则与网络无关"
+    : "🌐 直连不可达 ("+probeNet.ms+"ms): "+(probeNet.err||"未知错误"));
+  if(!probeNet.ok && _proxyBase){
+    var _t1 = Date.now();
+    try{
+      var _pp = await fetch(_proxyBase + "/auth/v1/health", { headers:{ apikey: key } });
+      probeProxy.ok = true; probeProxy.status = _pp.status;
+    }catch(_pe2){ probeProxy.err = String((_pe2 && _pe2.message) || _pe2); }
+    probeProxy.ms = Date.now() - _t1;
+    push(probeProxy.ok
+      ? "🛰 备用线路可达: HTTP "+probeProxy.status+" ("+probeProxy.ms+"ms) —— 同步会自动走备用线路"
+      : "🛰 备用线路不可达 ("+probeProxy.ms+"ms): "+(probeProxy.err||"未知错误"));
+  } else if(!probeNet.ok && !_proxyBase){
+    push("ℹ️ 未配置备用线路：点「📄 反代部署」按步骤配一条 Cloudflare Worker 反代，直连不通时自动兜底。");
+  }
   push("");
 
   // 构造一个带时间戳的探针行，避免与真实数据冲突
@@ -13661,10 +13125,16 @@ async function diagConnection(){
   // 结论：按错误码归类，直接告诉用户该怎么办
   push("\n【结论】");
   var allFail = Object.values(results).every(function(r){ return !r.ok; });
-  if(!probeNet.ok && allFail){
+  if(!probeNet.ok && allFail && probeProxy.ok){
+    push("→ 判定：直连被手机网络屏蔽，备用线路(反代)是通的。同步会自动走反代，无需处理；");
+    push("  若刚配置完仍失败，点「保存配置」后重测一次即可。");
+  } else if(!probeNet.ok && allFail && _proxyBase && !probeProxy.ok){
+    push("→ 判定：直连和备用线路都不通。先检查手机是否断网/飞行模式；");
+    push("  反代不通多半是用了 workers.dev 域名（国内常被墙）——去 Cloudflare 给 Worker 绑自定义域名。");
+  } else if(!probeNet.ok && allFail && !_proxyBase){
     push("→ 判定：手机当前连不上 Supabase 服务器（网络层失败），配置/权限/表结构都没问题。");
-    push("  处理：检查 Wi-Fi 与流量开关 → 可开关一次飞行模式换网 → 1 分钟后重测；");
-    push("  App 已内置「fetch→XHR→2.5秒重试」自动兜底，网络恢复后同步会自动续上。");
+    push("  处理：① 检查 Wi-Fi 与流量开关，可开关一次飞行模式换网后 1 分钟重测；");
+    push("  ② 长期方案：点「📄 反代部署」配备用线路，直连不通时同步自动切换，不再全挂。");
   }
   var anyRls = Object.values(results).some(function(r){ return r.code==="42501"; });
   var any404 = Object.values(results).some(function(r){ return /relation.*not found|404/i.test(r.summary||""); });
@@ -13696,7 +13166,7 @@ async function diagConnection(){
 async function safeUpsert(table, row, conflict){
   try{
     var p = g.supa.from(table).upsert([row], { onConflict:conflict, ignoreDuplicates:false });
-    var r = await syncWithTimeout(p, 20000);
+    var r = await syncWithTimeout(p, 35000);
     // ★ v21（批次D·P1-8）：拉取结果含 error 时透出 UI 提示（原版只判 r.data，静默吞掉表不存在/RLS拒绝等）
     if(r && r.error){ try{ toast("⚠️ 云端读取失败："+(r.error.message||r.error.code||"未知"), 4000); }catch(e){} return { ok:false, code: r.error.code||"", summary: errSummary(r.error) }; }
     return { ok:true };
@@ -13804,6 +13274,45 @@ function updateSyncStatus(text, isOnline){
   else { dot.className="sync-status-dot syncing"; status.innerHTML='<span class="sync-status-dot syncing"></span> '+text; }
 }
 
+// ===== v2.21 备用线路（反代）自动兜底 =====
+// 场景：手机网络直连 *.supabase.co 被屏蔽/丢包（TypeError: Failed to fetch）时，
+// 自动改走 Cloudflare Worker 反代。未配置反代时行为与原版完全一致。
+function _supaXhr(u, opt, ms){
+  return new Promise(function(res, rej){
+    try{
+      var x = new XMLHttpRequest();
+      x.open((opt && opt.method) || "GET", u, true);
+      x.timeout = ms || 6000;
+      var hs = (opt && opt.headers) || {};
+      Object.keys(hs).forEach(function(k){ try{ x.setRequestHeader(k, hs[k]); }catch(e){} });
+      x.onload = function(){
+        var ct = x.getResponseHeader("Content-Type") || "application/json";
+        res(new Response(x.responseText, { status: x.status || 200, headers: { "content-type": ct } }));
+      };
+      x.onerror = function(){ rej(new TypeError("Failed to fetch")); };
+      x.ontimeout = function(){ rej(new TypeError("XHR timeout")); };
+      x.send((opt && opt.body) == null ? null : (opt && opt.body));
+    }catch(e){ rej(e); }
+  });
+}
+function _supaAborted(opt, e){
+  try{ if(opt && opt.signal && opt.signal.aborted) return true; }catch(err){}
+  e = e || {};
+  return e.name === "AbortError" || e.code === "ABORT_ERR" || /abort/i.test(String(e.message||""));
+}
+function supaSmartFetch(u, opt){
+  opt = opt || {};
+  var _pb = String(g.supaProxy || "").trim().replace(/\/+$/, "");
+  if(!_pb) return window.fetch.call(window, u, opt); // 未配反代：保持原直连行为
+  var _pUrl = "";
+  try{ var _u = new URL(String(u)); _pUrl = _pb + _u.pathname + _u.search; }catch(e){}
+  if(!_pUrl) return window.fetch.call(window, u, opt);
+  // ① 直连快速试探(6s) → 失败 ② 反代(15s) → 都失败抛直连的原始错误
+  return _supaXhr(u, opt, 6000).catch(function(eDirect){
+    if(_supaAborted(opt, eDirect)) throw eDirect;
+    return _supaXhr(_pUrl, opt, 15000).catch(function(){ throw eDirect; });
+  });
+}
 function initSupa(){
   try{
     if(!g.supaUrl||!g.supaKey){ updateSyncStatus("未配置",false); return; }
@@ -13811,6 +13320,8 @@ function initSupa(){
     g.supa = window.supabase.createClient(g.supaUrl, g.supaKey, {
       // 启用 Realtime，使云端变更能即时推送到所有在线设备
       realtime: { params: { eventsPerSecond: 10 } },
+      // ★ v2.21 备用线路：直连失败自动走反代（见 supaSmartFetch）
+      global: { fetch: supaSmartFetch },
       // ★ v2.18 根因修复：默认 PKCE 流程需要 crypto.subtle（仅安全上下文可用），
       //    file:// / 部分 WebView 下 undefined → 登录永远 hang。改用 implicit 流程，
       //    token 走 URL 片段，完全不依赖 crypto.subtle，WebView 登录最稳。
@@ -14221,15 +13732,19 @@ function normSupaUrl(u){
 function saveSupaConfig(){
   var rawUrl = document.getElementById("supaUrl").value.trim();
   var rawKey = document.getElementById("supaKey").value.trim();
+  var rawProxy = "";
+  try{ rawProxy = (document.getElementById("supaProxy").value||"").trim(); }catch(e){}
   g.supaUrl = normSupaUrl(rawUrl);
   g.supaKey = rawKey;
+  g.supaProxy = rawProxy.replace(/\/+$/,"");
   document.getElementById("supaUrl").value = g.supaUrl; // 回填规范化后的地址
-  try{ localStorage.setItem("supa_url", g.supaUrl); localStorage.setItem("supa_key", g.supaKey); }catch(e){}
+  try{ var _pi = document.getElementById("supaProxy"); if(_pi) _pi.value = g.supaProxy; }catch(e){}
+  try{ localStorage.setItem("supa_url", g.supaUrl); localStorage.setItem("supa_key", g.supaKey); localStorage.setItem("supa_proxy", g.supaProxy); }catch(e){}
   g.supa = null; // 强制下次重新初始化
   initSupa();
   renderAuthUI();
   // ★ v2.19：明确回显实际生效的地址，便于确认自定义域名是否生效
-  toast(g.supaUrl ? ("配置已保存：" + g.supaUrl) : "已保存（URL 为空）");
+  toast(g.supaUrl ? ("配置已保存：" + g.supaUrl + (g.supaProxy ? "（备用线路：" + g.supaProxy + "）" : "")) : "已保存（URL 为空）");
 }
 
 async function testSupa(){
@@ -14319,7 +13834,7 @@ function loadGhConfig(){
     g.ghPath   = localStorage.getItem("vocab_gh_path")   || "data/vocab.json";
     g.archiveVia = localStorage.getItem("vocab_gh_archive_via") || "direct"; // direct | actions
     g.ghCron     = localStorage.getItem("vocab_gh_cron")   || "0 */6 * * *";
-    g.syncBackend = localStorage.getItem("vocab_sync_backend") || "github";
+    g.syncBackend = localStorage.getItem("vocab_sync_backend") || "supabase";
   } catch (e) {}
 }
 function saveGhConfig(){
@@ -14473,7 +13988,7 @@ var GitHubProvider = {
 // ===== 调度层（SyncManager）：按后端模式分发 push / pull ============
 // =====================================================================
 var _lastGhPush = 0;
-var GH_PUSH_INTERVAL = Math.max(30000, (g.autoPushInterval||30) * 1000); // 归档模式：跟随「自动上传间隔」设置，下限 30 秒（防 commit 风暴）
+var GH_PUSH_INTERVAL = 5 * 60 * 1000; // 归档模式：同一设备至少 5 分钟一次，避免 commit 风暴
 function _shouldGhPush() { return Date.now() - _lastGhPush > GH_PUSH_INTERVAL; }
 
 async function dispatchPush(manual) {
@@ -15531,10 +15046,10 @@ alter publication supabase_realtime add table public.wrong_words;
 alter publication supabase_realtime add table public.study_sessions;
 ================================================================================
 -->
-<div id="wbDebugFab" title="调试" hidden aria-hidden="true"></div>
-<div id="wbDebugModal" role="dialog" hidden>
+<div id="wbDebugFab" title="调试" hidden="" aria-hidden="true" style="display: none;"></div>
+<div id="wbDebugModal" role="dialog" hidden="">
   <div class="wb-dm">
-    <head>账本自检 verifyLedger <span class="x" id="wbDbgClose">✕</span></head>
+    账本自检 verifyLedger <span class="x" id="wbDbgClose">✕</span>
     <pre id="wbDbgOut">点「运行 verifyLedger」查看结果…</pre>
     <foot>
       <button class="run" id="wbDbgRun">运行 verifyLedger</button>
@@ -15546,10 +15061,10 @@ alter publication supabase_realtime add table public.study_sessions;
 
 <!-- 子页：账本自检（⚙️ 设置 → 账本自检，用时调取，不用随设置一起隐藏） -->
 <div class="settings-sub" id="sub-debug">
-  <div class="settings-sub-head"><button class="settings-sub-back" data-back>‹ 返回</button><span class="settings-sub-title">账本自检 verifyLedger</span></div>
+  <div class="settings-sub-head"><button class="settings-sub-back" data-back="">‹ 返回</button><span class="settings-sub-title">账本自检 verifyLedger</span></div>
   <div class="settings-sub-desc">检查各册「剩余 + 已听写 = 册总量」等恒等式。点运行查看结果，可一键复制发给我排查。</div>
   <div class="wb-dp">
-    <head><span>运行结果</span></head>
+    <span>运行结果</span>
     <pre id="wbDbgOut2">点「运行 verifyLedger」查看结果…</pre>
     <foot>
       <button class="run" id="wbDbgRun2">运行 verifyLedger</button>
@@ -15560,44 +15075,7 @@ alter publication supabase_realtime add table public.study_sessions;
 </div>
   <script src="vocab-data.js"></script>
   <script src="vocab-extension.js"></script>
-<script>
-/* v2.20 网络自检：打开即探测 GitHub/Supabase 可达性，给出非打扰提示 */
-(function(){
-  function probe(url, ms){
-    return new Promise(function(res){
-      var done=false;
-      var t=setTimeout(function(){ if(!done){done=true;res(false);} }, ms||7000);
-      try{
-        fetch(url,{method:"GET",cache:"no-store",mode:"no-cors"})
-          .then(function(){ if(!done){done=true;clearTimeout(t);res(true);} })
-          .catch(function(){ if(!done){done=true;clearTimeout(t);res(false);} });
-      }catch(e){ if(!done){done=true;clearTimeout(t);res(false);} }
-    });
-  }
-  setTimeout(function(){
-    try{
-      probe("https://api.github.com", 8000).then(function(gh){
-        if(typeof toast!=="function") return;
-        if(!gh){
-          toast("⚠️ 当前网络连不上 GitHub/Supabase，数据仅保存在本机。连接可用网络后再同步。", 9000);
-          return;
-        }
-        if((g.syncBackend==="github"||g.syncBackend==="dual") && !g.ghToken){
-          toast("✅ 网络正常（GitHub 可达）。请在「设置 → GitHub 同步」填写仓库名与 Token 开启云端同步，无需邮箱登录。", 9000);
-          return;
-        }
-        if(g.syncBackend==="supabase"){
-          probe((g.supaUrl||"https://jjhterjiydwpdzukicen.supabase.co")+"/auth/v1/health",8000)
-            .then(function(supa){
-              if(!supa) toast("⚠️ 当前网络连不上 Supabase（被墙）。建议改选 GitHub 同步：设置 → 同步后端 → GitHub。", 9000);
-            });
-        }
-      });
-    }catch(e){}
-  }, 1800);
-})();
-</script>
-</body>
+
 
 <script id="debug-script">
 (function(){
@@ -15690,4 +15168,4 @@ alter publication supabase_realtime add table public.study_sessions;
   }
 })();
 </script>
-</html>
+</body></html>
